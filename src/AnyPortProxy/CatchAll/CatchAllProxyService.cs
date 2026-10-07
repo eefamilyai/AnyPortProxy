@@ -178,10 +178,30 @@ public sealed class CatchAllProxyService : BackgroundService
             _udpError = null;
         }
 
-        string filter = FilterBuilder.Build(c,
-            o.SniffPorts.Concat(o.Forwards.Where(f => f.HasTcp).SelectMany(f => Enumerable.Range(f.Port, f.Last - f.Port + 1))),
-            o.Forwards.Where(f => f.HasUdp).SelectMany(f => Enumerable.Range(f.Port, f.Last - f.Port + 1)),
-            udp: _udpRelay is not null);
+        var tcpOwn = o.SniffPorts.Concat(o.Forwards.Where(f => f.HasTcp).SelectMany(f => Enumerable.Range(f.Port, f.Last - f.Port + 1))).ToList();
+        var udpOwn = o.Forwards.Where(f => f.HasUdp).SelectMany(f => Enumerable.Range(f.Port, f.Last - f.Port + 1)).ToList();
+        string filter = FilterBuilder.Build(c, tcpOwn, udpOwn, udp: _udpRelay is not null);
+
+        // Check with WinDivert's own compiler first. If the UDP half is ever rejected, keep TCP forwarding running.
+        try
+        {
+            if (WinDivert.Validate(filter) is { } why && _udpRelay is not null)
+            {
+                var tcpOnly = FilterBuilder.Build(c, tcpOwn, udpOwn, udp: false);
+                if (WinDivert.Validate(tcpOnly) is null)
+                {
+                    _log.LogError("UDP forwarding filter rejected ({Why}); continuing with TCP only", why);
+                    _udpRelay.Dispose();
+                    _udpRelay = null;
+                    _udpError = $"UDP unavailable (filter rejected: {why})";
+                    filter = tcpOnly;
+                }
+            }
+        }
+        catch (DllNotFoundException)
+        {
+            // Reported clearly when the driver is opened below.
+        }
 
         var policy = BuildPolicy(o);
         if (filter == _filter && _redirector is not null)

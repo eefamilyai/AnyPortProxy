@@ -173,6 +173,7 @@ dotnet build tests\AnyPortProxy.Tests -c Release
 $env:ANYPORTPROXY_DATA = "$env:TEMP\apx-test"    # use a scratch settings folder
 tests\AnyPortProxy.Tests\bin\Release\net10.0-windows\win-x64\ApxTests.exe          # 40,000+ unit checks
 # load test against a running proxy:  ApxTests.exe load <proxyPort> <backendPort> <requests> <bulkMB>
+# check every filter shape with the real WinDivert compiler:  ApxTests.exe filters
 ```
 
 ## How the all-ports forwarding works

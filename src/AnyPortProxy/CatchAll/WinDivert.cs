@@ -61,6 +61,13 @@ internal static unsafe class WinDivert
     [DllImport(Dll, SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false)]
     private static extern bool WinDivertHelperCompileFilter(string filter, int layer, IntPtr obj, uint objLen, out IntPtr errorStr, out uint errorPos);
 
+    /// <summary>Checks a filter with WinDivert's own compiler (no driver or admin needed). Null = valid.</summary>
+    public static string? Validate(string filter)
+    {
+        if (WinDivertHelperCompileFilter(filter, LayerNetwork, IntPtr.Zero, 0, out var errPtr, out var errPos)) return null;
+        return $"position {errPos}: {Marshal.PtrToStringAnsi(errPtr) ?? "unknown error"}";
+    }
+
     public static IntPtr Open(string filter)
     {
         if (!WinDivertHelperCompileFilter(filter, LayerNetwork, IntPtr.Zero, 0, out var errPtr, out var errPos))

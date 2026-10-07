@@ -24,9 +24,10 @@ internal static class FilterBuilder
         var tcpExcluded = c.BlockedPorts.Concat(tcpOwnPorts).Append(c.ListenPort);
         var udpExcluded = c.BlockedPorts.Concat(udpOwnPorts).Concat(CatchAllOptions.SystemUdpPorts).Append(c.ListenPort);
 
+        // WinDivert's parser doesn't accept "!( ... )", so "not in lo..hi" is written as "below lo or above hi".
         var lan = new StringBuilder();
         if (!c.InterceptLan)
-            foreach (var (lo, hi) in LanRanges) lan.Append($" and !(ip.SrcAddr >= {lo} and ip.SrcAddr <= {hi})");
+            foreach (var (lo, hi) in LanRanges) lan.Append($" and (ip.SrcAddr < {lo} or ip.SrcAddr > {hi})");
 
         var sb = new StringBuilder("ip and !loopback and (");
         sb.Append($"(inbound and tcp and ({Ranges("tcp.DstPort", ranges)}){Exclusions("tcp.DstPort", tcpExcluded)}{lan})");
