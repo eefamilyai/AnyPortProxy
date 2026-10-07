@@ -81,6 +81,7 @@ internal static class ProxyHost
         builder.Services.AddHostedService<PortForwardService>();
         builder.Services.AddHostedService<StatusWriterService>();
         builder.Services.AddHostedService<SelfHealService>();
+        builder.Services.AddHostedService<UpdateService>();
 
         builder.Build().Run();
     }

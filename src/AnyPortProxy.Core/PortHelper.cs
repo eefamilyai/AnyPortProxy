@@ -26,8 +26,10 @@ public static class PortHelper
         if (protocol != PortProtocol.Udp)
         {
             var sniff = c.Proxy.SniffPorts.FirstOrDefault(p => p >= port && p <= end);
-            if (sniff != 0)
+            if (sniff is 80 or 443)
                 return $"Port {sniff} is already used for website routing. Add it as a website instead (Websites page, or: apx site add).";
+            if (sniff != 0)
+                return $"Port {sniff} is already shared by address (game addresses). Tick \"Give this server its own address\" to add another server on it.";
         }
         if (c.Proxy.CatchAll.ListenPort >= port && c.Proxy.CatchAll.ListenPort <= end)
             return $"Port {c.Proxy.CatchAll.ListenPort} is used internally by AnyPortProxy. Pick another port.";
@@ -184,6 +186,53 @@ public static class PortHelper
         return results;
     }
 
+    /// <summary>
+    /// "Give this server its own address": adds host → computer on a shared port (and the router forward if asked),
+    /// checks the server answers, and says what players type.
+    /// </summary>
+    public static async Task<List<CheckResult>> AddGameAddressAsync(AppConfig c, string name, string host, int port, string target, bool router,
+        Action<string>? progress = null)
+    {
+        var results = new List<CheckResult>();
+        if (GameAddresses.Validate(c.Proxy, host, port, target) is { } error)
+        {
+            results.Add(CheckResult.Fail("Can't add this address", error));
+            return results;
+        }
+
+        bool firstOnPort = !c.Proxy.SniffPorts.Contains(port);
+        GameAddresses.Add(c.Proxy, host, port, target);
+        TargetParser.TryParse(target, out var th, out var tp);
+        var dest = TargetParser.Format(th, tp ?? port);
+        results.Add(CheckResult.Ok($"{host} on port {port} now goes to {dest}",
+            firstOnPort ? $"Port {port} is now shared by address. Players who use your IP or another name also go here until you add more servers." : null));
+
+        // The public port must reach this PC; AnyPortProxy itself listens on it, so no extra firewall rule is needed.
+        if (router)
+        {
+            var rule = c.Ports.FirstOrDefault(r => r.Port == port && r.Last == port) ?? new PortRule { Name = name, Port = port, Protocol = PortProtocol.Tcp, Firewall = false };
+            results.AddRange(await AddRouterAsync(rule, progress));
+            if (rule.Router && !c.Ports.Contains(rule)) c.Ports.Add(rule);
+        }
+
+        progress?.Invoke("Checking the server answers…");
+        results.Add(await NetInfo.CanConnectAsync(th, tp ?? port, 2500)
+            ? CheckResult.Ok($"The server at {dest} is answering")
+            : CheckResult.Warn($"Nothing is answering at {dest} yet",
+                NetInfo.IsThisPc(th) ? $"Start your server on this PC on port {tp} (for Minecraft: set server-port={tp} in server.properties)." : "Start the server on that computer — it will work as soon as it's running."));
+
+        // Something on this PC still using the shared port would now be bypassed.
+        var squatter = NetInfo.GetListeners().FirstOrDefault(l => l.Protocol == "TCP" && l.Port == port && l.Process != "AnyPortProxy");
+        if (squatter is not null)
+            results.Add(CheckResult.Warn($"{squatter.Process} is still using port {port} on this PC",
+                $"AnyPortProxy now answers on {port}. Move that server to another port (like {port + 1}) and add it as an address pointing to this PC:{port + 1}."));
+
+        ConfigStore.Save(c);
+        results.Add(CheckResult.Info($"Players connect to: {GameAddresses.ConnectAddress(host, port)}",
+            "The address must exist in DNS — one *.yourdomain record covers every name. Run the Health check to confirm."));
+        return results;
+    }
+
     public static async Task<List<CheckResult>> CloseAsync(AppConfig c, PortRule rule, bool blockInProxy, Action<string>? progress = null)
     {
         var results = new List<CheckResult>();
@@ -274,7 +323,20 @@ public static class PortHelper
 
         if (tcp && c.Proxy.SniffPorts.Contains(port))
         {
-            results.Add(CheckResult.Ok($"Port {port} is used for website routing", "Visitors are sent to computers based on the address they type (see Websites)."));
+            if (port is 80 or 443)
+            {
+                results.Add(CheckResult.Ok($"Port {port} is used for website routing", "Visitors are sent to computers based on the address they type (see Websites)."));
+                return results;
+            }
+            results.Add(CheckResult.Ok($"Port {port} is shared by address", "Players are sent to a server based on the address they type."));
+            foreach (var g in GameAddresses.List(c.Proxy).Where(g => g.Port == port))
+            {
+                var (h, p) = (TargetParser.TryParse(g.Target, out var th, out var tp) ? th : g.Target, tp ?? port);
+                bool ok = await NetInfo.CanConnectAsync(h, p);
+                var label = g.IsFallback ? "Anyone using another address" : GameAddresses.ConnectAddress(g.Host, port);
+                results.Add(ok ? CheckResult.Ok($"{label} → {TargetParser.Format(h, p)} is answering")
+                               : CheckResult.Warn($"{label} → {TargetParser.Format(h, p)} isn't answering", "Is that computer on and the server running on that port?"));
+            }
             return results;
         }
 

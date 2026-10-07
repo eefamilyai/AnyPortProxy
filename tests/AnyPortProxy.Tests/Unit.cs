@@ -206,6 +206,56 @@ static class Unit
         Check(Fw(2456, "10.0.0.1:3000", PortProtocol.Udp, 2458).TargetFor(2458) == ("10.0.0.1", 3002), "range target mapping");
         Console.WriteLine("udp/forward logic: done");
 
+        // --- Game addresses: shared port, fallback, isolation from websites, cleanup
+        var gp = new ProxyOptions { SniffPorts = [80, 443], DefaultTarget = "127.0.0.1" };
+        Websites.Upsert(gp, new Website { Host = "nas.ex.com", Computer = "10.0.0.2" });
+        Check(GameAddresses.Validate(gp, "mc1.ex.com", 25565, "10.0.0.5") is null, "game address valid");
+        Check(GameAddresses.Validate(gp, "mc1.ex.com", 25565, "127.0.0.1") is not null, "this PC on the shared port rejected");
+        Check(GameAddresses.Validate(gp, "mc1.ex.com", 443, "10.0.0.5") is not null, "web port rejected");
+        GameAddresses.Add(gp, "mc1.ex.com", 25565, "10.0.0.5");
+        GameAddresses.Add(gp, "mc2.ex.com", 25565, "127.0.0.1:25566");
+        Check(gp.SniffPorts.Contains(25565), "shared port listened on");
+        var gl = GameAddresses.List(gp);
+        Check(gl.Count == 3 && gl.Count(g => g.IsFallback) == 1 && gl.First(g => g.IsFallback).Target == "10.0.0.5", "first server becomes the fallback");
+        Check(Websites.List(gp).Count == 1, "game addresses don't show up as websites");
+        Websites.Upsert(gp, new Website { Host = "mc1.ex.com", Computer = "10.0.0.9" }); // a website with the same name
+        Check(GameAddresses.List(gp).Any(g => g.Host == "mc1.ex.com"), "adding a website keeps the game address");
+        Websites.Remove(gp, "mc1.ex.com");
+        Check(GameAddresses.List(gp).Any(g => g.Host == "mc1.ex.com"), "removing a website keeps the game address");
+        var gr = new Router(new FakeMonitor(gp).Monitor, NullLogger<Router>.Instance);
+        Check(gr.Resolve("mc1.ex.com", 25565) is { Host: "10.0.0.5", Port: 25565 }, "mc1 routed");
+        Check(gr.Resolve("mc2.ex.com", 25565) is { Host: "127.0.0.1", Port: 25566 }, "mc2 routed to this PC:25566");
+        Check(gr.Resolve("45.1.2.3", 25565) is { Host: "10.0.0.5" } && gr.Resolve(null, 25565) is { Host: "10.0.0.5" }, "IP / no name → fallback");
+        Check(gr.Resolve("nas.ex.com", 25565) is { Host: "10.0.0.5" }, "website rule never captures a game port");
+        Check(gr.Resolve("nas.ex.com", 443) is { Host: "10.0.0.2", Port: 443 }, "website still works");
+        GameAddresses.Remove(gp, "mc1.ex.com", 25565);
+        Check(gp.SniffPorts.Contains(25565), "port kept while servers remain");
+        GameAddresses.Remove(gp, "mc2.ex.com", 25565);
+        Check(!gp.SniffPorts.Contains(25565) && GameAddresses.List(gp).Count == 0, "last one removed → port back to normal");
+        Check(GameAddresses.ConnectAddress("mc.ex.com", 25565) == "mc.ex.com" && GameAddresses.ConnectAddress("x.ex.com", 8080) == "x.ex.com:8080", "connect address");
+        Console.WriteLine("game addresses: done");
+
+        // --- Updater: release parsing, version compare, safety checks
+        Check(Updater.ParseVersion("v1.5.0") == new Version(1, 5, 0) && Updater.ParseVersion("1.5") == new Version(1, 5, 0)
+              && Updater.ParseVersion("v2.0.1-beta") == new Version(2, 0, 1) && Updater.ParseVersion("latest") is null, "version parsing");
+        Check(Updater.IsValidRepo("jdoe/AnyPortProxy") && !Updater.IsValidRepo("jdoe") && !Updater.IsValidRepo("a/b/c") && !Updater.IsValidRepo("../x"), "repo names");
+        const string release = """
+            { "tag_name": "v9.9.0", "html_url": "https://github.com/jdoe/AnyPortProxy/releases/tag/v9.9.0", "body": "Notes",
+              "assets": [ { "name": "readme.txt", "browser_download_url": "https://github.com/x", "size": 1 },
+                          { "name": "AnyPortProxySetup-9.9.0.exe", "browser_download_url": "https://github.com/jdoe/AnyPortProxy/releases/download/v9.9.0/AnyPortProxySetup-9.9.0.exe",
+                            "size": 123, "digest": "sha256:ABCDEF" } ] }
+            """;
+        var ui = Updater.Parse(release);
+        Check(ui.Version == new Version(9, 9, 0) && ui.AssetName == "AnyPortProxySetup-9.9.0.exe" && ui.Size == 123 && ui.Sha256 == "abcdef", "release parsed");
+        bool threw = false;
+        try { Updater.Parse(release.Replace("https://github.com/jdoe/AnyPortProxy/releases/download", "https://evil.example/download")); }
+        catch (UpdateException) { threw = true; }
+        Check(threw, "non-github download link refused");
+        threw = false;
+        try { Updater.Parse("""{ "tag_name": "v1.0.0", "assets": [] }"""); } catch (UpdateException) { threw = true; }
+        Check(threw, "release without installer refused");
+        Console.WriteLine("updater: done");
+
         // --- Listener table: sees real listeners (RPC on 135 always listens on 0.0.0.0)
         using var lt = new ListenerTable();
         var k = lt.Lookup(135, 0, out _);

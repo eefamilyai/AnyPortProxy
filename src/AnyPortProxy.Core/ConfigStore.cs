@@ -74,6 +74,7 @@ public static class ConfigStore
             Proxy = root["Proxy"]?.Deserialize<ProxyOptions>(Json) ?? CreateDefault().Proxy,
             Ports = root["Ports"]?.Deserialize<List<PortRule>>(Json) ?? new(),
             Onboarded = (bool?)root["Onboarded"] ?? false,
+            Updates = root["Updates"]?.Deserialize<UpdateOptions>(Json) ?? new(),
         };
         return cfg;
     }
@@ -86,6 +87,7 @@ public static class ConfigStore
         root["Proxy"] = JsonSerializer.SerializeToNode(cfg.Proxy, Json);
         root["Ports"] = JsonSerializer.SerializeToNode(cfg.Ports, Json);
         root["Onboarded"] = cfg.Onboarded;
+        root["Updates"] = JsonSerializer.SerializeToNode(cfg.Updates ?? new UpdateOptions(), Json);
         root["Logging"] ??= new JsonObject
         {
             ["LogLevel"] = new JsonObject

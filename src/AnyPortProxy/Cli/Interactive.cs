@@ -180,8 +180,15 @@ internal static class Interactive
         return host;
     }
 
-    public static string ExpandComputer(string computer) =>
-        computer.Trim().ToLowerInvariant() is "this-pc" or "thispc" or "this" or "local" or "localhost" or "me" ? ThisPc : computer.Trim();
+    /// <summary>"this-pc" (optionally "this-pc:25566") → 127.0.0.1[:25566]; anything else unchanged.</summary>
+    public static string ExpandComputer(string computer)
+    {
+        computer = computer.Trim();
+        int colon = computer.LastIndexOf(':');
+        var name = colon > 0 && computer.IndexOf(':') == colon ? computer[..colon] : computer;
+        var port = name.Length < computer.Length ? computer[colon..] : "";
+        return name.ToLowerInvariant() is "this-pc" or "thispc" or "this" or "local" or "localhost" or "me" ? ThisPc + port : computer;
+    }
 
     private static async Task WebsitesMenuAsync()
     {
@@ -431,6 +438,29 @@ internal static class Interactive
             var preset = Presets.All.First(p => p.ToString() == pick);
             Ui.Hint(preset.Description);
             req = new OpenPortRequest { Name = preset.Name, Port = preset.Port, EndPort = preset.EndPort, Protocol = preset.Protocol };
+
+            var domain = string.IsNullOrWhiteSpace(c.Domain) ? "yourdomain.com" : c.Domain;
+            if (preset.ByAddress)
+            {
+                Ui.Hint($"{preset.Name} can share port {preset.Port} between several servers, told apart by the address players type.");
+                if (AnsiConsole.Confirm($"Give this server its own address (like mc.{domain})?", false))
+                {
+                    var address = ExpandHost(c, AnsiConsole.Prompt(new TextPrompt<string>($"Address [grey](e.g. mc2 → mc2.{Ui.E(domain)})[/]:")
+                        .Validate(s => Websites.ValidateHost(ExpandHost(c, s)) is { } e ? ValidationResult.Error($"[red]{Ui.E(e)}[/]") : ValidationResult.Success())));
+                    var computer = AskComputer($"Which computer runs {address}?");
+                    int? serverPort = computer == ThisPc
+                        ? AskPort($"Port the server uses on this PC [grey](not {preset.Port} — AnyPortProxy answers there)[/]", preset.Port + 1)
+                        : AskPort("Port the server uses on that computer", preset.Port);
+                    var target = TargetParser.Format(computer, serverPort == preset.Port ? null : serverPort);
+                    bool router = AnsiConsole.Confirm("Ask the router to forward the port automatically (UPnP)? [grey](skip if you set up DMZ)[/]", false);
+                    await CliApp.AddGameAddressAsync(c, preset.Name, address, preset.Port, target, router, preset);
+                    return;
+                }
+            }
+            else
+            {
+                Ui.Hint($"Running several {preset.Name} servers? This game can't share a port by address — give each one its own port (\"Send a port to another computer\").");
+            }
         }
 
         req.Firewall = true;

@@ -99,6 +99,7 @@ internal sealed class MainForm : Form
             };
             Controls.Add(warn);
         }
+        Controls.Add(BuildUpdateBar());
 
         Load += async (_, _) =>
         {
@@ -111,7 +112,112 @@ internal sealed class MainForm : Form
             _timer.Start();
             PublicIp = await NetInfo.GetPublicIpAsync();
             StatusChanged?.Invoke(this, EventArgs.Empty);
+            await CheckForUpdatesAsync(userAsked: false);
+            _updateTimer.Tick += async (_, _) => await CheckForUpdatesAsync(userAsked: false);
+            _updateTimer.Start();
         };
+    }
+
+    // ---------------------------------------------------------------- updates
+
+    private readonly System.Windows.Forms.Timer _updateTimer = new() { Interval = 12 * 60 * 60 * 1000 };
+    private readonly Panel _updateBar = new() { Dock = DockStyle.Top, Height = 54, BackColor = Theme.AccentLight, Visible = false, Padding = new Padding(16, 6, 16, 6) };
+    private readonly Label _updateText = new() { AutoSize = true, UseMnemonic = false, Font = Theme.Bold, ForeColor = Theme.Text, Margin = new Padding(0, 8, 12, 0) };
+
+    public UpdateInfo? AvailableUpdate { get; private set; }
+
+    public event EventHandler? UpdateChecked;
+
+    private Control BuildUpdateBar()
+    {
+        var row = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = Color.Transparent };
+        var notes = Theme.Secondary("What's new", (_, _) => ShowReleaseNotes());
+        var now = Theme.Primary("Update now", async (_, _) => await InstallUpdateAsync());
+        var later = Theme.Secondary("Later", (_, _) => _updateBar.Visible = false);
+        foreach (var b in new[] { notes, now, later }) b.Margin = new Padding(0, 0, 8, 0);
+        row.Controls.AddRange([new Label { Text = "⬆", Font = Theme.Glyph, AutoSize = true, ForeColor = Theme.Accent, Margin = new Padding(0, 4, 8, 0) }, _updateText, notes, now, later]);
+        _updateBar.Controls.Add(row);
+        return _updateBar;
+    }
+
+    /// <summary>Checks the GitHub releases. Quiet in the background; explains problems when the user asked.</summary>
+    public async Task CheckForUpdatesAsync(bool userAsked)
+    {
+        var repo = Updater.Repo(Config);
+        if (repo is null)
+        {
+            if (userAsked)
+                MessageBox.Show(this, "This copy of AnyPortProxy wasn't built with an update source (a GitHub repository), so it can't check for updates.",
+                    "Updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        try
+        {
+            AvailableUpdate = await Updater.CheckAsync(repo);
+        }
+        catch (Exception ex) when (ex is UpdateException or HttpRequestException or TaskCanceledException)
+        {
+            if (userAsked) MessageBox.Show(this, ex.Message, "Couldn't check for updates", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            UpdateChecked?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        UpdateChecked?.Invoke(this, EventArgs.Empty);
+        if (AvailableUpdate is { } u)
+        {
+            bool auto = Config.Updates.AutoInstall && State == ServiceState.Running;
+            _updateText.Text = $"AnyPortProxy {u.Version} is available (you have {AppPaths.Version})." +
+                               (auto ? " It will install by itself when nobody is connected." : "");
+            _updateBar.Visible = true;
+        }
+        else
+        {
+            _updateBar.Visible = false;
+            if (userAsked) MessageBox.Show(this, $"You're up to date (version {AppPaths.Version}).", "Updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+
+    public void ShowReleaseNotes()
+    {
+        if (AvailableUpdate is not { } u) return;
+        var text = string.IsNullOrWhiteSpace(u.Notes) ? "(No release notes.)" : u.Notes.Length > 3000 ? u.Notes[..3000] + "…" : u.Notes;
+        if (MessageBox.Show(this, text + "\n\nOpen the release page on GitHub?", $"What's new in {u.Version}",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(u.Page.ToString()) { UseShellExecute = true }); } catch { }
+        }
+    }
+
+    /// <summary>Downloads + verifies the new installer, runs it silently, and closes; the installer reopens the app.</summary>
+    public async Task InstallUpdateAsync()
+    {
+        if (AvailableUpdate is not { } u) return;
+        if (MessageBox.Show(this, $"Update to AnyPortProxy {u.Version} now?\n\nConnections drop for a few seconds while it restarts. Your websites, ports and settings are kept, and this window reopens when it's done.",
+                "Update", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+
+        string? path = null;
+        bool ok = ProgressDialog.Run(this, $"Updating to {u.Version}", async log =>
+        {
+            log($"Downloading {u.AssetName} ({u.Size / 1_048_576.0:0} MB) from GitHub…");
+            int lastPct = -1;
+            path = await Updater.DownloadAsync(u, new Progress<double>(v =>
+            {
+                int pct = (int)(v * 100);
+                if (pct / 10 != lastPct / 10) log($"{pct}%");
+                lastPct = pct;
+            }));
+            log(u.Sha256 is null ? "Downloaded and checked (size, product and version)." : "Downloaded and verified (GitHub checksum matches).");
+            log("Starting the installer — this window will close and reopen in a moment.");
+        });
+        if (!ok || path is null) return;
+        try
+        {
+            Updater.RunInstaller(path, reopenApp: true);
+            Application.Exit();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Couldn't start the installer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private void AddPage(FlowLayoutPanel nav, string key, string label, PageBase page)

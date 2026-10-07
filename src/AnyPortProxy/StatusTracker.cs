@@ -49,6 +49,12 @@ public sealed class StatusTracker
 
     public void Failed() => Interlocked.Increment(ref _failed);
 
+    public long ActiveConnections => Interlocked.Read(ref _active);
+
+    private volatile string? _update;
+
+    public void SetUpdate(string? message) => _update = message;
+
     public ServiceStatus Snapshot(FlowTable flows, ConfigMonitor config)
     {
         long now = Stopwatch.GetTimestamp();
@@ -75,6 +81,7 @@ public sealed class StatusTracker
             Forwards = _forwards.Values.OrderBy(f => f.Port).ThenBy(f => f.Protocol).ToList(),
             UdpSessions = AnyPortProxy.Proxy.UdpRelay.ActiveSessions,
             ConfigError = config.Error,
+            Update = _update,
             ConfigNotes = config.Notes.ToList(),
             Repairs = _repairs.ToList(),
         };

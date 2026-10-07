@@ -6,12 +6,28 @@
   Downloads WinDivert from its official GitHub release the first time.
 #>
 param(
-    [string]$WinDivertVersion = "2.2.2"
+    [string]$WinDivertVersion = "2.2.2",
+    # GitHub "owner/repo" that the app checks for updates. Default: read from this folder's git remote (local only).
+    [string]$UpdateRepo = ""
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $lib = Join-Path $root 'lib\WinDivert'
 $version = ([xml](Get-Content (Join-Path $root 'Directory.Build.props'))).Project.PropertyGroup.Version
+
+# Where updates come from: the GitHub repo this folder is pushed to (reads the local git config; contacts nothing).
+if (-not $UpdateRepo) {
+    $remote = $null
+    try {
+        $ErrorActionPreference = 'Continue'   # a git error (no repo, git not installed) must not stop the build
+        $remote = (& git -C $root remote get-url origin 2>&1) | Where-Object { $_ -is [string] } | Select-Object -First 1
+    } catch { }
+    finally { $ErrorActionPreference = 'Stop' }
+    if ($remote -match 'github\.com[:/]([^/\s]+)/([^/\s]+?)(\.git)?/?$') { $UpdateRepo = "$($Matches[1])/$($Matches[2])" }
+}
+if ($UpdateRepo) { Write-Host "Updates will come from: github.com/$UpdateRepo" -ForegroundColor Cyan }
+else { Write-Host "No GitHub remote found: this build won't check for updates (use -UpdateRepo owner/repo)." -ForegroundColor Yellow }
+$repoArg = "-p:UpdateRepo=$UpdateRepo"
 
 # 1. WinDivert driver
 if (-not (Test-Path (Join-Path $lib 'WinDivert64.sys'))) {
@@ -32,7 +48,7 @@ if (-not (Test-Path (Join-Path $lib 'WinDivert64.sys'))) {
 $publish = Join-Path $root 'publish'
 if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
 foreach ($proj in 'src\AnyPortProxy\AnyPortProxy.csproj', 'src\AnyPortProxy.Gui\AnyPortProxy.Gui.csproj') {
-    dotnet publish (Join-Path $root $proj) -c Release -o $publish
+    dotnet publish (Join-Path $root $proj) -c Release -o $publish $repoArg
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $proj" }
 }
 Get-ChildItem $publish -Filter *.pdb | Remove-Item
@@ -49,7 +65,7 @@ if (Test-Path $payload) { Remove-Item $payload }
 Compress-Archive -Path ($payloadFiles | ForEach-Object { Join-Path $publish $_ }) -DestinationPath $payload -CompressionLevel Optimal
 
 $setupOut = Join-Path $artifacts 'setup'
-dotnet publish (Join-Path $root 'src\AnyPortProxy.Setup\AnyPortProxy.Setup.csproj') -c Release -o $setupOut "-p:PayloadZip=$payload"
+dotnet publish (Join-Path $root 'src\AnyPortProxy.Setup\AnyPortProxy.Setup.csproj') -c Release -o $setupOut "-p:PayloadZip=$payload" $repoArg
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for the installer" }
 
 $dist = Join-Path $root 'dist'
@@ -63,3 +79,4 @@ Write-Host "Built AnyPortProxy $version" -ForegroundColor Green
 Write-Host "  App:        $publish"
 Write-Host "  Installer:  $setup  ($([math]::Round((Get-Item $setup).Length / 1MB)) MB)"
 Write-Host "  SHA-256:    $hash"
+if ($UpdateRepo) { Write-Host "  Updates:    github.com/$UpdateRepo (the repository must be public for update checks)" }

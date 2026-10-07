@@ -135,6 +135,15 @@ internal sealed class PortsPage : PageBase
             item.SubItems[5].ForeColor = running.Count > 0 ? Theme.Green : Theme.Amber;
             _list.Items.Add(item);
         }
+        // Servers that share a port by address (e.g. mc2.example.com → 192.168.1.30).
+        foreach (var g in GameAddresses.List(Main.Config.Proxy).OrderBy(g => g.Port).ThenBy(g => g.IsFallback))
+        {
+            var item = new ListViewItem([
+                g.IsFallback ? $"🏷  anyone else on {g.Port}" : $"🏷  {GameAddresses.ConnectAddress(g.Host, g.Port)}",
+                g.Port.ToString(), "TCP (by address)", "–", "–", "→ " + g.Target,
+            ]) { Tag = g, ForeColor = g.IsFallback ? Theme.Gray : Theme.Text };
+            _list.Items.Add(item);
+        }
         _list.EndUpdate();
         _empty.Visible = _list.Items.Count == 0;
         _list.Visible = !_empty.Visible;
@@ -168,6 +177,20 @@ internal sealed class PortsPage : PageBase
 
     private async Task ClosePortAsync()
     {
+        if (_list.SelectedItems.Count > 0 && _list.SelectedItems[0].Tag is GameAddress g)
+        {
+            var gc = Main.Config;
+            var others = GameAddresses.List(gc.Proxy).Count(x => x.Port == g.Port && !x.IsFallback);
+            string question = g.IsFallback
+                ? $"Players who use your IP address or an unknown name on port {g.Port} currently go to {g.Target}.\n\nRemove that, so only the listed addresses work?"
+                : $"Remove {g.Host} (port {g.Port} → {g.Target})?" + (others <= 1 ? $"\n\nIt's the last server on port {g.Port}, so the port goes back to normal forwarding." : "");
+            if (MessageBox.Show(Main, question, "Remove game address", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (g.IsFallback) gc.Proxy.Routes.RemoveAll(r => r.Port == g.Port && r.Host.Trim() == "*");
+            else GameAddresses.Remove(gc.Proxy, g.Host, g.Port);
+            Main.SaveConfig();
+            OnShow(false);
+            return;
+        }
         if (_list.SelectedItems.Count == 0 || _list.SelectedItems[0].Tag is not PortRule rule) return;
         var c = Main.Config;
         bool canBlock = rule.Protocol != PortProtocol.Udp && c.Proxy.CatchAll.Enabled;

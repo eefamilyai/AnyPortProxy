@@ -139,6 +139,15 @@ public sealed class PortRule
     }
 }
 
+public sealed class UpdateOptions
+{
+    /// <summary>Let the background service install new versions by itself (when nobody is connected).</summary>
+    public bool AutoInstall { get; set; } = true;
+
+    /// <summary>Override the GitHub "owner/repo" baked in at build time.</summary>
+    public string? Repo { get; set; }
+}
+
 public sealed class AppConfig
 {
     /// <summary>The user's domain (e.g. reggilion.com), used to show "connect to" addresses.</summary>
@@ -150,6 +159,8 @@ public sealed class AppConfig
 
     /// <summary>The user finished (or skipped) the getting-started tour.</summary>
     public bool Onboarded { get; set; }
+
+    public UpdateOptions Updates { get; set; } = new();
 
     [JsonIgnore]
     internal System.Text.Json.Nodes.JsonObject? Raw { get; set; }

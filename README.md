@@ -26,6 +26,30 @@ The installer contains everything (no .NET or anything else needed): the app, th
 
 Silent install (for scripts): `AnyPortProxySetup-<version>.exe /S` — exit code 0 = success, log in `%TEMP%\AnyPortProxySetup.log`.
 
+## Updates
+
+AnyPortProxy updates itself from this repository's **GitHub Releases**:
+
+- The app checks at startup and every 12 hours, and shows a bar with *What's new* / *Update now*. `apx update` does the same in a terminal.
+- The background service also checks every 6 hours and — if *Install updates automatically* is on (default) — installs the new version **when nobody is connected** (or after a day at the latest). Settings are always kept.
+- Every download is verified before it runs: exact size, GitHub's SHA-256 checksum, and the file's product name/version. Links outside github.com are refused.
+
+For this to work: the repository must be **public**, each release needs a tag like `v1.5.0`, and the `AnyPortProxySetup-<version>.exe` from `dist\` attached. `build.ps1` bakes the repository in automatically (read from this folder's git remote — nothing is sent anywhere); override with `.\build.ps1 -UpdateRepo owner/repo`. Turn automatic installs off in Settings or with `apx update auto off`.
+
+## Several game servers on one port (by address)
+
+Some protocols send the address the player typed, so several servers can share one port: `mc1.example.com` → one computer, `mc2.example.com` → another, both on 25565. Players type just `mc2.example.com` (Minecraft assumes 25565).
+
+| Works | Doesn't (the game never sends the address) |
+|---|---|
+| Minecraft Java, anything over HTTPS (any port), plain HTTP (any port) | Minecraft Bedrock, Valheim, CS2, Terraria, Rust, ARK… and all UDP |
+
+**How:** Ports → *Open a port* → pick the game → tick **🏷 Give this server its own address** → type `mc2` and the computer. Or `apx game add mc2 192.168.1.30`, or `apx port open "minecraft java" --address mc2 --to 192.168.1.30`.
+
+- The first server on a port also catches players who type your IP or an unlisted name.
+- A server on **this PC** must move off the shared port (e.g. Minecraft `server-port=25566`) — the app suggests the next port and warns if something is still sitting on it.
+- For games that can't do it, give each server its own port (*Send a port to another computer*), optionally with an SRV DNS record if the game supports SRV.
+
 ## Build it yourself
 
 ```powershell
@@ -87,6 +111,9 @@ apx forward udp on|off                                also forward UDP (on by de
 apx portmap add 51820 192.168.58.20 --udp --name WireGuard   send a port to another computer
 apx portmap remove 51820
 apx limits 20000 300                                  flood protection: total / per internet address
+apx games                                             game servers sharing a port by address
+apx game add mc2 192.168.58.30                        mc2.yourdomain.com → that computer (port 25565)
+apx update  |  apx update --check  |  apx update auto on|off
 ```
 
 Commands that change things ask Windows for Administrator permission automatically (the result shows in a new window).

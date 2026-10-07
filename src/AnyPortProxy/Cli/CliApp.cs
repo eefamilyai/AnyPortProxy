@@ -10,7 +10,7 @@ internal sealed class CliArgs
 {
     private static readonly HashSet<string> Valued = new(StringComparer.OrdinalIgnoreCase)
     {
-        "--name", "-n", "--http", "--https", "--to", "--lines",
+        "--name", "-n", "--http", "--https", "--to", "--lines", "--address", "--port", "--game",
     };
 
     private readonly Dictionary<string, string?> _flags = new(StringComparer.OrdinalIgnoreCase);
@@ -151,6 +151,10 @@ internal static class CliApp
                 return await PortAsync(a);
             case "forward":
                 return Forward(a);
+            case "game" or "games":
+                return await GameAsync(a);
+            case "update" or "updates":
+                return await UpdateAsync(a);
             case "portmap" or "portmaps" or "portrule" or "portrules":
                 return PortMap(a);
             case "limits":
@@ -218,6 +222,17 @@ internal static class CliApp
         Row("apx portmap", "List port rules");
         Row("apx portmap add <port|range> <computer>[:port] [--udp|--both] [--name X]", "e.g. apx portmap add 51820 192.168.58.20 --udp --name WireGuard");
         Row("apx portmap remove <port> [--udp|--both]", "Remove a port rule");
+
+        Section("Several game servers on one port, by address (Minecraft Java, web apps)");
+        Row("apx games", "List game addresses");
+        Row("apx game add <address> <computer>[:port] [--port 25565]", "e.g. apx game add mc2 192.168.58.30  (players type mc2.yourdomain.com)");
+        Row("apx game remove <address> [--port 25565]", "Remove a game address");
+        Row("apx port open \"minecraft java\" --address mc2 --to <computer>", "Same, from the port helper");
+
+        Section("Updates");
+        Row("apx update", "Check for a new version and install it");
+        Row("apx update --check", "Only check");
+        Row("apx update auto on | off", "Let the service install updates by itself (when nobody is connected)");
         AnsiConsole.Write(t);
         AnsiConsole.MarkupLine("\n[grey]Commands that change things ask Windows for Administrator permission automatically.[/]");
     }
@@ -276,6 +291,7 @@ internal static class CliApp
             foreach (var p in st.Problems()) Ui.Warn(p);
             foreach (var n in st.ConfigNotes) Ui.Info($"Setting ignored: {n}");
             foreach (var r in st.Repairs.TakeLast(3)) Ui.Ok($"Self-repair: {r}");
+            if (st.Update is not null) Ui.Info($"Updates: {st.Update}");
         }
     }
 
@@ -518,6 +534,8 @@ internal static class CliApp
                 }
                 var req = Interactive.ResolvePortRequest(what, ProtocolFlag(a), a.Get("--name"));
                 if (req is null) return 1;
+                if (a.Get("--address") is { } addr)
+                    return await AddGameAddressAsync(c, req.Name, addr, req.Port, a.Get("--to") ?? "", a.Has("--router"), Presets.ForPort(req.Port));
                 req.Firewall = !a.Has("--no-firewall");
                 req.Router = a.Has("--router");
                 return await Interactive.RunOpenAsync(c, req, a.Has("--yes")) ? 0 : 1;
@@ -732,6 +750,164 @@ internal static class CliApp
                 Ui.Error("Usage: apx portmap [add|remove] ...  (see apx help)");
                 return 1;
         }
+    }
+
+    // ---------------------------------------------------------------- game addresses
+
+    public static void GamesList(AppConfig c)
+    {
+        var games = GameAddresses.List(c.Proxy);
+        if (games.Count == 0)
+        {
+            Ui.Info("No game addresses yet. Example: apx game add mc2 192.168.58.30   (Minecraft Java, port 25565)");
+            return;
+        }
+        var t = new Table().Border(TableBorder.Rounded).AddColumns("Players type", "Port", "Goes to");
+        foreach (var g in games.OrderBy(g => g.Port).ThenBy(g => g.IsFallback))
+            t.AddRow(g.IsFallback ? "[grey](any other address / IP)[/]" : Ui.E(GameAddresses.ConnectAddress(g.Host, g.Port)), g.Port.ToString(), Ui.E(g.Target));
+        AnsiConsole.Write(t);
+    }
+
+    private static async Task<int> GameAsync(CliArgs a)
+    {
+        var c = ConfigStore.Load();
+        var sub = a.Pos(1).ToLowerInvariant();
+        if (sub is "" or "list")
+        {
+            GamesList(c);
+            return 0;
+        }
+        if (!RequireAdmin()) return 1;
+        int port = 25565;
+        if (a.Get("--port") is { } ps && (!int.TryParse(ps, out port) || port is < 1 or > 65535))
+        {
+            Ui.Error("--port must be a number from 1 to 65535.");
+            return 1;
+        }
+        var game = a.Get("--game")?.ToLowerInvariant();
+        if (game is not null && game is not ("minecraft" or "mc" or "web" or "http" or "https"))
+        {
+            var preset = Presets.Search(game).FirstOrDefault();
+            Ui.Error(GameAddresses.WhyNot(preset?.Name ?? game, preset?.Port ?? port));
+            return 1;
+        }
+        switch (sub)
+        {
+            case "add":
+                if (a.Pos(2) == "" || a.Pos(3) == "")
+                {
+                    Ui.Error("Usage: apx game add <address> <computer>[:port] [--port 25565]   e.g. apx game add mc2 192.168.58.30");
+                    return 1;
+                }
+                return await AddGameAddressAsync(c, "", a.Pos(2), port, a.Pos(3), a.Has("--router"), Presets.ForPort(port));
+            case "remove" or "rm" or "delete":
+            {
+                var host = Websites.Expand(c.Domain, a.Pos(2));
+                if (!GameAddresses.Remove(c.Proxy, host, port))
+                {
+                    Ui.Error($"No game address {host} on port {port}. See: apx games");
+                    return 1;
+                }
+                ConfigStore.Save(c);
+                Ui.Ok($"Removed {host}." + (c.Proxy.SniffPorts.Contains(port) ? "" : $" Port {port} is back to normal forwarding."));
+                return 0;
+            }
+            default:
+                Ui.Error("Usage: apx game add|remove ...  (see apx help)");
+                return 1;
+        }
+    }
+
+    public static async Task<int> AddGameAddressAsync(AppConfig c, string name, string address, int port, string computer, bool router, PortPreset? preset)
+    {
+        if (preset is { ByAddress: false } && preset.Port == port)
+        {
+            Ui.Error(GameAddresses.WhyNot(preset.Name, port));
+            return 1;
+        }
+        if (computer.Length == 0)
+        {
+            Ui.Error("Which computer runs this server? Add --to <computer>, e.g. --to 192.168.58.30 or --to this-pc:25566");
+            return 1;
+        }
+        var host = Websites.Expand(c.Domain, address);
+        var target = Interactive.ExpandComputer(computer);
+        // "this-pc" without a port: suggest the next port, since AnyPortProxy now answers on this one.
+        if (NetInfo.IsThisPc(target) && TargetParser.TryParse(target, out _, out var tp) && tp is null)
+        {
+            Ui.Error($"A server on this PC must use another port, because AnyPortProxy answers on {port}. Try: this-pc:{port + 1} (and set the server to port {port + 1}).");
+            return 1;
+        }
+        var results = await Ui.Busy("Setting it up…", p => PortHelper.AddGameAddressAsync(c, name.Length > 0 ? name : host, host, port, target, router, p));
+        Ui.Results(results);
+        return results.Any(r => r.Status == CheckStatus.Fail) ? 1 : 0;
+    }
+
+    // ---------------------------------------------------------------- updates
+
+    private static async Task<int> UpdateAsync(CliArgs a)
+    {
+        var c = ConfigStore.Load();
+        if (a.Pos(1).Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            if (a.Pos(2) == "")
+            {
+                Ui.Info($"Automatic updates: {(c.Updates.AutoInstall ? "on" : "off")}");
+                return 0;
+            }
+            if (!RequireAdmin()) return 1;
+            c.Updates.AutoInstall = a.Pos(2).Equals("on", StringComparison.OrdinalIgnoreCase);
+            ConfigStore.Save(c);
+            Ui.Ok(c.Updates.AutoInstall ? "Updates will install automatically when nobody is connected." : "Automatic updates off. Run apx update to update.");
+            return 0;
+        }
+
+        var repo = Updater.Repo(c);
+        if (repo is null)
+        {
+            Ui.Warn("This copy wasn't built with an update source (no GitHub repository). Rebuild with build.ps1 after adding your GitHub remote.");
+            return 1;
+        }
+        Ui.Info($"You have version {AppPaths.Version}. Checking github.com/{repo}…");
+        UpdateInfo? update;
+        try
+        {
+            update = await Updater.CheckAsync(repo);
+        }
+        catch (Exception ex) when (ex is UpdateException or HttpRequestException or TaskCanceledException)
+        {
+            Ui.Error(ex.Message);
+            return 1;
+        }
+        if (update is null)
+        {
+            Ui.Ok("You're up to date.");
+            return 0;
+        }
+        Ui.Ok($"Version {update.Version} is available.");
+        if (!string.IsNullOrWhiteSpace(update.Notes))
+            AnsiConsole.Write(new Panel(Ui.E(update.Notes.Length > 1200 ? update.Notes[..1200] + "…" : update.Notes)).Header("[bold] What's new [/]").Border(BoxBorder.Rounded));
+        if (a.Has("--check")) return 0;
+        if (!a.Has("--yes") && Ui.Interactive && !AnsiConsole.Confirm("Install it now? (connections drop for a few seconds; settings are kept)", true)) return 0;
+        if (!RequireAdmin()) return 1;
+
+        string path;
+        try
+        {
+            path = await AnsiConsole.Progress().StartAsync(async ctx =>
+            {
+                var task = ctx.AddTask($"Downloading {Ui.E(update.AssetName)}", maxValue: 1.0);
+                return await Updater.DownloadAsync(update, new Progress<double>(v => task.Value = v));
+            });
+        }
+        catch (Exception ex) when (ex is UpdateException or HttpRequestException or IOException or TaskCanceledException)
+        {
+            Ui.Error(ex.Message);
+            return 1;
+        }
+        Ui.Ok("Downloaded and verified. Installing (this window can close)…");
+        Updater.RunInstaller(path, reopenApp: false);
+        return 0;
     }
 
     private static int Limits(CliArgs a)

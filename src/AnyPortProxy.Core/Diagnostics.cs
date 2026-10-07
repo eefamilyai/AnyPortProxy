@@ -172,6 +172,19 @@ public static class Diagnostics
                     "Is that computer turned on, and is the website running on that port?"));
         }
 
+        // --- Game servers that share a port by address
+        foreach (var g in GameAddresses.List(c.Proxy).Where(g => !g.IsFallback))
+        {
+            if (!TargetParser.TryParse(g.Target, out var gh, out var gp)) continue;
+            bool ok = await NetInfo.CanConnectAsync(gh, gp ?? g.Port, 2000, ct);
+            var label = GameAddresses.ConnectAddress(g.Host, g.Port);
+            report(ok
+                ? CheckResult.Ok($"{label} → {TargetParser.Format(gh, gp ?? g.Port)} is answering")
+                : CheckResult.Warn($"{label} → {TargetParser.Format(gh, gp ?? g.Port)} isn't answering", "Is that server running? (For Minecraft, check server-port in server.properties.)"));
+        }
+        if (status is { IsFresh: true, Update: { } upd })
+            report(CheckResult.Info("Updates", upd));
+
         // --- Port rules ("send a port to another computer")
         foreach (var f in c.Proxy.Forwards.Where(f => f.HasTcp))
         {

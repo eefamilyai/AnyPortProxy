@@ -36,6 +36,9 @@ public sealed class ServiceStatus
     /// <summary>Active UDP relay sessions (all-ports forwarding + port rules).</summary>
     public int UdpSessions { get; set; }
 
+    /// <summary>Automatic-update status ("Version 1.5.0 is ready — installing when nobody is connected"), or null.</summary>
+    public string? Update { get; set; }
+
     /// <summary>Set when config.json can't be read; the proxy keeps running on the last good settings.</summary>
     public string? ConfigError { get; set; }
 

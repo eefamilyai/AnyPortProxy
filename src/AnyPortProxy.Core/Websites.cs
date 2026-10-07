@@ -41,10 +41,13 @@ public static class Websites
 {
     private static string Norm(string h) => h.Trim().TrimEnd('.').ToLowerInvariant();
 
+    /// <summary>A website rule (ports 80/443, or "all web ports"); game addresses on other ports are separate.</summary>
+    public static bool IsWebRule(RouteRule r) => r.Port is null or 80 or 443;
+
     public static List<Website> List(ProxyOptions p)
     {
         var result = new List<Website>();
-        foreach (var group in p.Routes.GroupBy(r => Norm(r.Host)))
+        foreach (var group in p.Routes.Where(IsWebRule).GroupBy(r => Norm(r.Host)))
         {
             var rules = group.ToList();
             var general = rules.FirstOrDefault(r => r.Port is null);
@@ -67,24 +70,34 @@ public static class Websites
                 Computer = computer,
                 HttpPort = PortFor(r80, 80),
                 HttpsPort = PortFor(r443, 443),
-                Other = rules.Where(r => r.Port is int x && x != 80 && x != 443).ToList(),
             });
         }
         return result;
     }
 
-    /// <summary>Adds or replaces the website (matched by originalHost, or its own host).</summary>
+    /// <summary>Adds or replaces the website (matched by originalHost, or its own host). Game addresses are left alone.</summary>
     public static void Upsert(ProxyOptions p, Website w, string? originalHost = null)
     {
         var key = Norm(originalHost ?? w.Host);
-        int index = p.Routes.FindIndex(r => Norm(r.Host) == key);
-        p.Routes.RemoveAll(r => Norm(r.Host) == key || Norm(r.Host) == Norm(w.Host));
-        var newRules = w.ToRoutes().Select(r => { r.Host = w.Host.Trim(); return r; }).ToList();
+        int index = p.Routes.FindIndex(r => IsWebRule(r) && Norm(r.Host) == key);
+        p.Routes.RemoveAll(r => IsWebRule(r) && (Norm(r.Host) == key || Norm(r.Host) == Norm(w.Host)));
+        var newRules = w.ToRoutes().Where(IsWebRule).Select(r => { r.Host = w.Host.Trim(); return r; }).ToList();
         if (index < 0 || index > p.Routes.Count) p.Routes.AddRange(newRules);
         else p.Routes.InsertRange(index, newRules);
     }
 
-    public static bool Remove(ProxyOptions p, string host) => p.Routes.RemoveAll(r => Norm(r.Host) == Norm(host)) > 0;
+    public static bool Remove(ProxyOptions p, string host) => p.Routes.RemoveAll(r => IsWebRule(r) && Norm(r.Host) == Norm(host)) > 0;
+
+    /// <summary>"nas" → "nas.example.com" when a domain is set; strips http:// and trailing slashes.</summary>
+    public static string Expand(string? domain, string text)
+    {
+        var h = text.Trim().TrimEnd('.').ToLowerInvariant();
+        foreach (var prefix in new[] { "http://", "https://" })
+            if (h.StartsWith(prefix)) h = h[prefix.Length..];
+        h = h.TrimEnd('/');
+        if (h.Length > 0 && !h.Contains('.') && h != "*" && !string.IsNullOrWhiteSpace(domain)) h = $"{h}.{domain.Trim().TrimEnd('.')}";
+        return h;
+    }
 
     public static string? ValidateHost(string host)
     {

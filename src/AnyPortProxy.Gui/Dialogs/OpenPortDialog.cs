@@ -17,6 +17,15 @@ internal sealed class OpenPortDialog : Form
     private readonly CheckBox _firewall = new() { Text = "Windows Firewall — let devices on my home network connect", AutoSize = true, Checked = true };
     private readonly CheckBox _router = new() { Text = "My router — ask it to forward this port automatically (UPnP)", AutoSize = true, Checked = true };
     private readonly FlowLayoutPanel _hints = new() { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Dock = DockStyle.Fill };
+
+    // "Give this server its own address" (several servers on one port, told apart by the address players type)
+    private readonly CheckBox _byAddress = new() { Text = "🏷  Give this server its own address  (lets several servers share this port)", AutoSize = true, Font = Theme.Bold, Margin = new Padding(0, 10, 0, 2), Visible = false };
+    private readonly TextBox _address = new() { Width = 150, Font = Theme.Body, PlaceholderText = "mc2" };
+    private readonly Label _domainSuffix = new() { AutoSize = true, UseMnemonic = false, ForeColor = Theme.Gray, Margin = new Padding(2, 7, 0, 0) };
+    private readonly TextBox _addrComputer = new() { Width = 140, Font = Theme.Body, PlaceholderText = "192.168.1.30" };
+    private readonly TextBox _addrPort = new() { Width = 70, Font = Theme.Body };
+    private readonly FlowLayoutPanel _addrRow1 = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, Margin = new Padding(20, 2, 0, 0), Visible = false };
+    private readonly FlowLayoutPanel _addrRow2 = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, Margin = new Padding(20, 2, 0, 0), Visible = false };
     private readonly Button _open;
     private readonly System.Windows.Forms.Timer _debounce = new() { Interval = 400 };
     private int _hintVersion;
@@ -29,8 +38,8 @@ internal sealed class OpenPortDialog : Form
         Font = Theme.Body;
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(960, 620);
-        MinimumSize = new Size(860, 560);
+        ClientSize = new Size(980, 700);
+        MinimumSize = new Size(880, 620);
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Color.White;
         Padding = new Padding(18);
@@ -71,6 +80,33 @@ internal sealed class OpenPortDialog : Form
         var routerHint = new Label { UseMnemonic = false, Text = "      Skip this if you've already forwarded all ports to this PC in your router's settings.", AutoSize = true, ForeColor = Theme.Gray, Font = Theme.Small };
         form.Controls.Add(routerHint, 0, 7);
         form.SetColumnSpan(routerHint, 2);
+
+        Label Small(string t, int left = 8) => new() { Text = t, AutoSize = true, UseMnemonic = false, Margin = new Padding(left, 7, 4, 0) };
+        _domainSuffix.Text = "." + (string.IsNullOrWhiteSpace(main.Config.Domain) ? "yourdomain.com" : main.Config.Domain);
+        _addrRow1.Controls.AddRange([Small("Address", 0), _address, _domainSuffix]);
+        var thisPc = Theme.Secondary("This PC", (_, _) =>
+        {
+            _addrComputer.Text = "127.0.0.1";
+            if (PortRanges.TryParseOne(_port.Text, out var p, out _) && (!int.TryParse(_addrPort.Text, out var cur) || cur == p))
+                _addrPort.Text = (p + 1).ToString(); // AnyPortProxy answers on the shared port, so the server moves up one
+        });
+        thisPc.Margin = new Padding(4, 0, 0, 0);
+        _addrRow2.Controls.AddRange([Small("Runs on", 0), _addrComputer, thisPc, Small("port"), _addrPort]);
+        form.Controls.Add(_byAddress, 0, 8);
+        form.SetColumnSpan(_byAddress, 2);
+        form.Controls.Add(_addrRow1, 0, 9);
+        form.SetColumnSpan(_addrRow1, 2);
+        form.Controls.Add(_addrRow2, 0, 10);
+        form.SetColumnSpan(_addrRow2, 2);
+        _byAddress.CheckedChanged += (_, _) =>
+        {
+            _addrRow1.Visible = _addrRow2.Visible = _byAddress.Checked;
+            _firewall.Enabled = !_byAddress.Checked; // AnyPortProxy itself answers on the shared port
+            if (_byAddress.Checked && _addrPort.Text.Length == 0 && PortRanges.TryParseOne(_port.Text, out var p, out _)) _addrPort.Text = p.ToString();
+            _open!.Text = _byAddress.Checked ? "Add server" : "Open port"; // handler only runs after construction
+            Schedule();
+        };
+        foreach (var tb in new[] { _address, _addrComputer, _addrPort }) tb.TextChanged += (_, _) => Schedule();
 
         var hintsTitle = new Label { UseMnemonic = false, Text = "💡  What I noticed", Font = Theme.H2, Dock = DockStyle.Top, Height = 40, Padding = new Padding(0, 12, 0, 0) };
         var hintsCard = new Card { Dock = DockStyle.Fill, Fill = Theme.Light, Edge = Theme.Border, Padding = new Padding(12) };
@@ -197,6 +233,20 @@ internal sealed class OpenPortDialog : Form
         }
 
         var c = _main.Config;
+        var preset = _presets.SelectedItem as PortPreset;
+        bool custom = _presets.SelectedItem is string || preset is null || preset.Port != lo;
+        // Offer "its own address" only where it can work: games/apps that send the address (or a custom TCP port).
+        bool canShare = lo == hi && Protocol == PortProtocol.Tcp && (custom || preset!.ByAddress) && lo is not (80 or 443);
+        _byAddress.Visible = canShare;
+        if (!canShare && _byAddress.Checked) _byAddress.Checked = false;
+
+        if (_byAddress.Checked)
+        {
+            _hints.ResumeLayout();
+            await UpdateAddressHintsAsync(lo, preset, custom, version);
+            return;
+        }
+
         if (PortHelper.Validate(c, lo, hi, Protocol) is { } error)
         {
             AddHint(CheckStatus.Fail, error);
@@ -205,8 +255,16 @@ internal sealed class OpenPortDialog : Form
         }
         _open.Enabled = true;
 
-        if (_presets.SelectedItem is PortPreset p && p.Port == lo) AddHint(CheckStatus.Info, p.Description);
+        if (preset is not null && preset.Port == lo) AddHint(CheckStatus.Info, preset.Description);
         else if (Presets.Describe(lo) is { } d) AddHint(CheckStatus.Info, d);
+
+        if (preset is not null && preset.Port == lo)
+        {
+            if (preset.ByAddress)
+                AddHint(CheckStatus.Info, $"Several {preset.Name} servers? Tick \"Give this server its own address\" — players type e.g. mc2{_domainSuffix.Text} and each goes to its own server, all on port {lo}.");
+            else
+                AddHint(CheckStatus.Info, GameAddresses.WhyNot(preset.Name, lo));
+        }
 
         if (Presets.WarningForRange(lo, hi) is { } w)
             AddHint(w.Risk == Risk.High ? CheckStatus.Fail : CheckStatus.Warn, (w.Risk == Risk.High ? "Dangerous: " : "Careful: ") + w.Why);
@@ -232,9 +290,89 @@ internal sealed class OpenPortDialog : Form
         AddHint(CheckStatus.Info, $"People will connect to:  {_main.ConnectAddress(lo)}");
     }
 
+    private string AddressHost => Websites.Expand(_main.Config.Domain, _address.Text);
+
+    private string AddressTarget(int port)
+    {
+        var computer = _addrComputer.Text.Trim();
+        int sp = int.TryParse(_addrPort.Text.Trim(), out var v) ? v : port;
+        return TargetParser.Format(computer, sp == port ? null : sp);
+    }
+
+    private async Task UpdateAddressHintsAsync(int port, PortPreset? preset, bool custom, int version)
+    {
+        var c = _main.Config;
+        var host = AddressHost;
+        if (_address.Text.Trim().Length == 0 || _addrComputer.Text.Trim().Length == 0)
+        {
+            AddHint(CheckStatus.Info, $"Type the address players will use (e.g. mc2 → mc2{_domainSuffix.Text}) and the computer the server runs on.");
+            return;
+        }
+        if (!int.TryParse(_addrPort.Text.Trim(), out var serverPort) || serverPort is < 1 or > 65535)
+        {
+            AddHint(CheckStatus.Fail, "The server's port must be a number from 1 to 65535.");
+            return;
+        }
+        var target = AddressTarget(port);
+        if (GameAddresses.Validate(c.Proxy, host, port, target) is { } error)
+        {
+            AddHint(CheckStatus.Fail, error);
+            return;
+        }
+        _open.Enabled = true;
+
+        AddHint(CheckStatus.Ok, $"Players type:  {GameAddresses.ConnectAddress(host, port)}   →   {TargetParser.Format(_addrComputer.Text.Trim(), serverPort)}");
+        if (custom)
+            AddHint(CheckStatus.Warn, "This only works if the app speaks Minecraft Java, HTTPS or HTTP — those send the address. Other games can't share a port by address.");
+
+        var others = GameAddresses.List(c.Proxy).Where(g => g.Port == port).ToList();
+        if (others.Count == 0)
+            AddHint(CheckStatus.Info, $"First server on port {port}: it also gets players who use your IP address or a name you haven't added.");
+        else
+            AddHint(CheckStatus.Info, $"Already on port {port}: " + string.Join(",  ", others.Select(g => (g.IsFallback ? "anyone else" : g.Host) + " → " + g.Target)));
+
+        bool isThisPc = NetInfo.IsThisPc(_addrComputer.Text.Trim());
+        bool minecraft = preset?.Name.StartsWith("Minecraft Java") == true || port == 25565;
+        if (isThisPc)
+            AddHint(CheckStatus.Info, $"Run the server on this PC on port {serverPort}" + (minecraft ? $" (in server.properties: server-port={serverPort})." : "."));
+        if (!_router.Checked) AddHint(CheckStatus.Info, $"Your router must send port {port} to this PC (DMZ or a port forward).");
+        AddHint(CheckStatus.Info, $"{host} must exist in DNS — one *{_domainSuffix.Text} record covers every server name.");
+
+        // Is a server still sitting on the shared port on this PC? It has to move.
+        var listeners = await Task.Run(NetInfo.GetListeners);
+        if (version != _hintVersion || IsDisposed) return;
+        var squatter = listeners.FirstOrDefault(l => l.Protocol == "TCP" && l.Port == port && l.Process != "AnyPortProxy");
+        if (squatter is not null)
+            AddHint(CheckStatus.Warn, $"{squatter.Process} is using port {port} on this PC right now. Move it to another port (like {port + 1})" +
+                                      (minecraft ? $" — set server-port={port + 1} in server.properties —" : "") +
+                                      $" and add it as an address that runs on This PC, port {port + 1}.");
+        var target2 = TargetParser.TryParse(target, out var th, out var tp) ? (th, tp ?? port) : (target, port);
+        bool answering = await NetInfo.CanConnectAsync(target2.Item1, target2.Item2, 1500);
+        if (version != _hintVersion || IsDisposed) return;
+        AddHint(answering ? CheckStatus.Ok : CheckStatus.Warn, answering
+            ? $"The server at {TargetParser.Format(target2.Item1, target2.Item2)} is answering."
+            : $"Nothing answers at {TargetParser.Format(target2.Item1, target2.Item2)} yet — start the server there (you can add it now anyway).");
+    }
+
     private async Task OpenAsync()
     {
         if (!PortRanges.TryParseOne(_port.Text, out var lo, out var hi)) return;
+        if (_byAddress.Checked)
+        {
+            _open.Enabled = false;
+            _open.Text = "Working…";
+            UseWaitCursor = true;
+            var cfg = _main.Config;
+            var name = _name.Text.Trim();
+            var host = AddressHost;
+            var target = AddressTarget(lo);
+            bool router = _router.Checked;
+            var res = await Task.Run(() => PortHelper.AddGameAddressAsync(cfg, name.Length > 0 ? name : host, host, lo, target, router));
+            UseWaitCursor = false;
+            ResultsDialog.Show(this, $"Added {host}", res);
+            Close();
+            return;
+        }
         if (Presets.WarningForRange(lo, hi) is { Risk: Risk.High } w &&
             MessageBox.Show(this, $"{w.Why}\n\nAre you really sure you want to open this to the whole internet?", "Dangerous port",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)

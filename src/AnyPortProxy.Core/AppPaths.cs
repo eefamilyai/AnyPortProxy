@@ -27,6 +27,14 @@ public static class AppPaths
         (Assembly.GetEntryAssembly() ?? typeof(AppPaths).Assembly)
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "?";
 
+    /// <summary>
+    /// GitHub "owner/repo" that updates come from, baked in at build time (build.ps1 reads it from the local git remote).
+    /// Null when this copy was built without one.
+    /// </summary>
+    public static string? UpdateRepo { get; } =
+        typeof(AppPaths).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+            .FirstOrDefault(a => a.Key == "UpdateRepo")?.Value is { } repo && Updater.IsValidRepo(repo) ? repo : null;
+
     public static bool SameDir(string a, string b) =>
         string.Equals(Path.GetFullPath(a).TrimEnd('\\'), Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
 

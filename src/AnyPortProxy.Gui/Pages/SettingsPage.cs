@@ -67,6 +67,46 @@ internal sealed class SettingsPage : PageBase
                 perIp.Value = 300;
             })));
 
+        Section("Updates");
+        var repo = Updater.Repo(Main.Config);
+        var updateStatus = Theme.Wrap(
+            repo is null
+                ? $"You have version {AppPaths.Version}. This copy wasn't built with an update source, so it can't update itself."
+                : Main.AvailableUpdate is { } u
+                    ? $"You have version {AppPaths.Version}. Version {u.Version} is available."
+                    : $"You have version {AppPaths.Version}. Updates come from github.com/{repo}.",
+            Theme.Body, Main.AvailableUpdate is null ? Theme.Text : Theme.Accent);
+        _stack.Controls.Add(updateStatus);
+        var auto = new CheckBox
+        {
+            Text = "Install updates automatically (when nobody is connected) — recommended",
+            AutoSize = true,
+            Checked = Main.Config.Updates.AutoInstall,
+            Enabled = repo is not null,
+            Tag = "natural",
+        };
+        auto.CheckedChanged += (_, _) =>
+        {
+            Main.Config.Updates.AutoInstall = auto.Checked;
+            Main.SaveConfig();
+        };
+        _stack.Controls.Add(auto);
+        var check = Theme.Secondary("🔄  Check for updates", async (s, _) =>
+        {
+            ((Button)s!).Enabled = false;
+            await Main.CheckForUpdatesAsync(userAsked: true);
+            ((Button)s!).Enabled = true;
+            OnShow(false);
+        });
+        check.Enabled = repo is not null;
+        var row = Row(check);
+        if (Main.AvailableUpdate is not null)
+        {
+            row.Controls.Add(Theme.Primary("⬆  Update now", async (_, _) => await Main.InstallUpdateAsync()));
+            row.Controls.Add(Theme.Secondary("What's new", (_, _) => Main.ShowReleaseNotes()));
+        }
+        _stack.Controls.Add(row);
+
         Section("Help");
         _stack.Controls.Add(Theme.Wrap("New to AnyPortProxy, or forgot how something works? The tour explains everything step by step and helps you set it up.", Theme.Small, Theme.Gray));
         _stack.Controls.Add(Row(Theme.Primary("📖  Show the getting-started tour", (_, _) => Main.ShowTour())));

@@ -2,7 +2,7 @@ namespace AnyPortProxy.Core;
 
 public enum Risk { Low, Medium, High }
 
-public sealed record PortPreset(string Name, int Port, int? EndPort, PortProtocol Protocol, string Description, Risk Risk = Risk.Low)
+public sealed record PortPreset(string Name, int Port, int? EndPort, PortProtocol Protocol, string Description, Risk Risk = Risk.Low, bool ByAddress = false)
 {
     public int Last => EndPort ?? Port;
     public string Range => EndPort is int e ? $"{Port}-{e}" : $"{Port}";
@@ -15,7 +15,7 @@ public static class Presets
 {
     public static IReadOnlyList<PortPreset> All { get; } =
     [
-        new("Minecraft Java Edition", 25565, null, PortProtocol.Tcp, "The normal PC version of Minecraft."),
+        new("Minecraft Java Edition", 25565, null, PortProtocol.Tcp, "The normal PC version of Minecraft.", ByAddress: true),
         new("Minecraft Bedrock Edition", 19132, null, PortProtocol.Udp, "Minecraft for Windows 10/11, consoles and phones."),
         new("Terraria", 7777, null, PortProtocol.Tcp, "Terraria dedicated server."),
         new("Valheim", 2456, 2458, PortProtocol.Udp, "Valheim dedicated server."),
@@ -27,14 +27,14 @@ public static class Presets
         new("Counter-Strike 2 / Source games", 27015, null, PortProtocol.Both, "Source-engine dedicated servers."),
         new("Project Zomboid", 16261, 16262, PortProtocol.Udp, "Project Zomboid dedicated server."),
         new("7 Days to Die", 26900, 26902, PortProtocol.Both, "7 Days to Die dedicated server."),
-        new("Plex Media Server", 32400, null, PortProtocol.Tcp, "Watch your Plex library from anywhere."),
-        new("Jellyfin", 8096, null, PortProtocol.Tcp, "Jellyfin media server (http)."),
-        new("Emby", 8096, null, PortProtocol.Tcp, "Emby media server (http)."),
-        new("Home Assistant", 8123, null, PortProtocol.Tcp, "Home Assistant web interface."),
-        new("Web dev server (React / Next.js / Node)", 3000, null, PortProtocol.Tcp, "Typical port for `npm start` / `next dev`.", Risk.Medium),
-        new("Vite dev server", 5173, null, PortProtocol.Tcp, "Typical port for `npm run dev` with Vite.", Risk.Medium),
-        new("Web app on 8080", 8080, null, PortProtocol.Tcp, "Common alternative web port."),
-        new("Web app on 8443 (https)", 8443, null, PortProtocol.Tcp, "Common alternative https port."),
+        new("Plex Media Server", 32400, null, PortProtocol.Tcp, "Watch your Plex library from anywhere.", ByAddress: true),
+        new("Jellyfin", 8096, null, PortProtocol.Tcp, "Jellyfin media server (http).", ByAddress: true),
+        new("Emby", 8096, null, PortProtocol.Tcp, "Emby media server (http).", ByAddress: true),
+        new("Home Assistant", 8123, null, PortProtocol.Tcp, "Home Assistant web interface.", ByAddress: true),
+        new("Web dev server (React / Next.js / Node)", 3000, null, PortProtocol.Tcp, "Typical port for `npm start` / `next dev`.", Risk.Medium, ByAddress: true),
+        new("Vite dev server", 5173, null, PortProtocol.Tcp, "Typical port for `npm run dev` with Vite.", Risk.Medium, ByAddress: true),
+        new("Web app on 8080", 8080, null, PortProtocol.Tcp, "Common alternative web port.", ByAddress: true),
+        new("Web app on 8443 (https)", 8443, null, PortProtocol.Tcp, "Common alternative https port.", ByAddress: true),
         new("WireGuard VPN", 51820, null, PortProtocol.Udp, "WireGuard VPN server."),
         new("TeamSpeak 3", 9987, null, PortProtocol.Udp, "TeamSpeak voice server (also uses 30033 TCP for files)."),
         new("Mumble", 64738, null, PortProtocol.Both, "Mumble voice server."),

@@ -46,7 +46,8 @@ public sealed class Router
             public bool TryPick(int port, out Target t)
             {
                 if (ByPort is not null && ByPort.TryGetValue(port, out t)) return true;
-                if (Any is { } any)
+                // Rules without a port are website rules: they cover 80/443 only, never game ports.
+                if (Any is { } any && port is 80 or 443)
                 {
                     t = any;
                     return true;
