@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <Version>1.2.0</Version>
+    <Product>AnyPortProxy</Product>
+    <Company>AnyPortProxy</Company>
+    <Copyright>AnyPortProxy</Copyright>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>AnyPortProxySetup</AssemblyName>
+    <AssemblyTitle>AnyPortProxy Setup</AssemblyTitle>
+    <RootNamespace>AnyPortProxy.Setup</RootNamespace>
+    <ApplicationIcon>../../assets/AnyPortProxy.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AnyPortProxy.Core\AnyPortProxy.Core.csproj" />
+  </ItemGroup>
+
+  <!-- build.ps1 passes -p:PayloadZip=<zip of the published app>; it's embedded so the setup is one file. -->
+  <ItemGroup Condition="'$(PayloadZip)' != '' and Exists('$(PayloadZip)')">
+    <EmbeddedResource Include="$(PayloadZip)" LogicalName="payload.zip" />
+  </ItemGroup>
+
+</Project>

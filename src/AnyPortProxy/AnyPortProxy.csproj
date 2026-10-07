@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>AnyPortProxy</AssemblyName>
+    <AssemblyTitle>AnyPortProxy service and apx command</AssemblyTitle>
+    <ApplicationIcon>../../assets/AnyPortProxy.ico</ApplicationIcon>
+    <RootNamespace>AnyPortProxy</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AnyPortProxy.Core\AnyPortProxy.Core.csproj" />
+    <InternalsVisibleTo Include="ApxTests" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.*" />
+    <PackageReference Include="Spectre.Console" Version="0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WinDivert binaries are fetched into lib\WinDivert by build.ps1; they must sit next to the exe. -->
+    <None Include="..\..\lib\WinDivert\WinDivert.dll" Link="WinDivert.dll" Condition="Exists('..\..\lib\WinDivert\WinDivert.dll')"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="..\..\lib\WinDivert\WinDivert64.sys" Link="WinDivert64.sys" Condition="Exists('..\..\lib\WinDivert\WinDivert64.sys')"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+</Project>
