@@ -39,7 +39,15 @@ internal sealed partial class ActivityPage : PageBase
         Controls.Add(bar);
         Controls.Add(Header("Activity",
             "Every connection through AnyPortProxy shows up here live: who connected, which address or port, and where they were sent. " +
-            "Yellow = warning, red = problem."));
+            "Yellow = warning, red = problem.",
+            "Each line is one connection:\n\n" +
+            "    [443] 203.0.113.7:51234 tls host=nas.example.com -> 192.168.1.20:443\n\n" +
+            "means: someone at 203.0.113.7 connected to port 443, asked for nas.example.com, and was sent to 192.168.1.20.\n\n" +
+            "•  \"forwarded\" lines are games/apps on other ports.\n" +
+            "•  [UDP …] lines are UDP sessions (games, voice, VPN).\n" +
+            "•  Yellow lines usually mean the computer behind an address isn't answering — is it on?\n" +
+            "•  When it's very busy, lines are summarised (\"Busy: 1,234 more connections…\") so the log never floods.\n\n" +
+            "Nothing shows up when you test from outside? Your router probably isn't sending traffic to this PC — see the Health check."));
         _box.BringToFront();
     }
 

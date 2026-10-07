@@ -124,9 +124,6 @@ internal static class CliApp
             case "status":
                 Status();
                 return 0;
-            case "tour" or "learn" or "tutorial":
-                await Interactive.TourAsync();
-                return 0;
             case "setup":
                 if (!RequireAdmin()) return 1;
                 await Interactive.SetupAsync();
@@ -180,7 +177,6 @@ internal static class CliApp
 
         Section("Basics");
         Row("apx status", "Is it running? What's set up?");
-        Row("apx tour", "Learn how AnyPortProxy works (2 minutes)");
         Row("apx setup", "Guided first-time setup");
         Row("apx check [--fix]", "Health check: find (and fix) problems");
         Row("apx start | stop | restart", "Control the background service");

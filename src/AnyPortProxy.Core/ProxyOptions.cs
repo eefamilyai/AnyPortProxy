@@ -20,7 +20,36 @@ public sealed class ProxyOptions
 
     public CatchAllOptions CatchAll { get; set; } = new();
 
+    /// <summary>"Send port X to computer Y" rules (TCP and/or UDP). Work without the WinDivert driver.</summary>
+    public List<PortForward> Forwards { get; set; } = new();
+
     public LimitOptions Limits { get; set; } = new();
+}
+
+/// <summary>Sends one port (or a range) on this PC to another computer.</summary>
+public sealed class PortForward
+{
+    public string Name { get; set; } = "";
+    public int Port { get; set; }
+    public int? EndPort { get; set; }
+    public PortProtocol Protocol { get; set; } = PortProtocol.Tcp;
+
+    /// <summary>"host" (same port) or "host:port" (for a range: the first port; the rest follow in order).</summary>
+    public string Target { get; set; } = "";
+
+    [JsonIgnore] public int Last => EndPort is int e && e > Port ? e : Port;
+    [JsonIgnore] public string Range => Last > Port ? $"{Port}-{Last}" : $"{Port}";
+    [JsonIgnore] public string ProtocolText => Protocol switch { PortProtocol.Udp => "UDP", PortProtocol.Both => "TCP+UDP", _ => "TCP" };
+
+    public bool HasTcp => Protocol != PortProtocol.Udp;
+    public bool HasUdp => Protocol != PortProtocol.Tcp;
+
+    /// <summary>Destination host and port for incoming port <paramref name="port"/>.</summary>
+    public (string Host, int Port) TargetFor(int port)
+    {
+        TargetParser.TryParse(Target, out var host, out var tp);
+        return (host, tp is int first ? first + (port - Port) : port);
+    }
 }
 
 /// <summary>Protection against floods and runaway clients.</summary>
@@ -73,6 +102,16 @@ public sealed class CatchAllOptions
     /// </summary>
     public bool SmartRouting { get; set; } = true;
 
+    /// <summary>
+    /// Also forward UDP (games, voice chat, VPNs). Apps on this PC that listen on all interfaces get UDP directly;
+    /// apps that only listen on localhost — or a forwarding target on another computer — are relayed.
+    /// </summary>
+    public bool Udp { get; set; } = true;
+
+    /// <summary>UDP ports Windows itself uses; never redirected (DHCP, NTP, NetBIOS, IPsec, SSDP, mDNS, LLMNR, WS-Discovery).</summary>
+    [JsonIgnore]
+    public static readonly int[] SystemUdpPorts = [53, 67, 68, 123, 137, 138, 500, 1900, 3702, 4500, 5353, 5355];
+
     [JsonIgnore]
     public static readonly int[] DefaultBlocked = [22, 23, 135, 137, 138, 139, 445, 3389, 5357, 5985, 5986];
 }
@@ -108,6 +147,9 @@ public sealed class AppConfig
     public ProxyOptions Proxy { get; set; } = new();
 
     public List<PortRule> Ports { get; set; } = new();
+
+    /// <summary>The user finished (or skipped) the getting-started tour.</summary>
+    public bool Onboarded { get; set; }
 
     [JsonIgnore]
     internal System.Text.Json.Nodes.JsonObject? Raw { get; set; }

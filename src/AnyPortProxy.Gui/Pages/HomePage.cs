@@ -61,9 +61,7 @@ internal sealed class HomePage : PageBase
                     Main.Config.Domain = domain.Text.Trim().TrimEnd('.').ToLowerInvariant();
                     Main.SaveConfig();
                 }
-                MessageBox.Show(Main, "AnyPortProxy is running! 🎉\n\nNext: add your websites (like nas.yourdomain.com), or open a port for a game.",
-                    "Installed", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                Main.ShowPage("websites");
+                Main.ShowTour(); // installed: now teach them how to use it
             }
         };
         _stack.Controls.Add(install);
@@ -93,6 +91,10 @@ internal sealed class HomePage : PageBase
             (c.Proxy.CatchAll.Enabled ? "Every other port on this PC is reachable from the internet." : "All-ports forwarding is off.") +
             (c.Ports.Count > 0 ? $" {c.Ports.Count} port(s) opened with the helper." : ""),
             "Open a port for a game or app", () => Main.ShowPage("ports", autoRun: true)));
+        if (!c.Onboarded || Websites.List(c.Proxy).Count == 0)
+            cards.Controls.Add(MakeCard("📖  New here?",
+                "Take the 2-minute tour: how AnyPortProxy works, and setting up your domain, router, first website and first game.",
+                "Take the tour", Main.ShowTour));
         cards.Controls.Add(MakeCard("🩺  Health check",
             "Finds common problems (router, firewall, DNS, busy ports) and fixes most of them with one click.",
             "Run health check", () => Main.ShowPage("health", autoRun: true)));

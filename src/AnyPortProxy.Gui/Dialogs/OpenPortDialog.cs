@@ -220,7 +220,7 @@ internal sealed class OpenPortDialog : Form
             else AddHint(CheckStatus.Info, "I'll add it to the forwarded ports.");
         }
         if (Protocol != PortProtocol.Tcp)
-            AddHint(CheckStatus.Info, "UDP goes straight to this PC (AnyPortProxy doesn't relay UDP) — the firewall and router steps matter for it.");
+            AddHint(CheckStatus.Info, "UDP: apps listening on all interfaces get it directly (the firewall rule matters for those); localhost-only apps are relayed. Your router must forward UDP too.");
         if (_router.Checked && hi - lo + 1 > PortHelper.MaxRouterPorts)
             AddHint(CheckStatus.Warn, $"That's more than {PortHelper.MaxRouterPorts} ports — the router step will be skipped; forward them by hand.");
         _hints.ResumeLayout();

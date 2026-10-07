@@ -34,7 +34,7 @@ internal sealed class MainForm : Form
         Icon = Theme.AppIcon;
         Font = Theme.Body;
         BackColor = Color.White;
-        Size = new Size(1140, 800);
+        Size = new Size(1140, 860);
         MinimumSize = new Size(920, 620);
         StartPosition = FormStartPosition.CenterScreen;
 
@@ -105,6 +105,8 @@ internal sealed class MainForm : Form
             ReloadConfig();
             RefreshStatus();
             ShowPage("home");
+            // First time after installing: walk the user through it.
+            if (State != ServiceState.NotInstalled && !Config.Onboarded) BeginInvoke(ShowTour);
             _timer.Tick += (_, _) => RefreshStatus();
             _timer.Start();
             PublicIp = await NetInfo.GetPublicIpAsync();
@@ -298,6 +300,15 @@ internal sealed class MainForm : Form
         _timer.Start();
         RefreshStatus();
         return Task.FromResult(ok);
+    }
+
+    /// <summary>The getting-started tour.</summary>
+    public void ShowTour()
+    {
+        using (var tour = new OnboardingForm(this)) tour.ShowDialog(this);
+        ReloadConfig();
+        RefreshStatus();
+        ShowPage("home");
     }
 
     public static void OpenFolder(string path)

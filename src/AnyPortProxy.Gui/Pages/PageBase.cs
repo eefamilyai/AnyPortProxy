@@ -17,7 +17,8 @@ internal abstract class PageBase : UserControl
     public virtual void OnHide() { }
 
     /// <summary>Title + description block that docks to the top of a page.</summary>
-    protected static Control Header(string title, string description) => new PageHeader(title, description);
+    /// <param name="help">Plain-language explanation shown by the page's "How does this work?" link.</param>
+    protected static Control Header(string title, string description, string? help = null) => new PageHeader(title, description, help);
 
     /// <summary>Page title + wrapped description; height follows the text (only recomputed when the width changes).</summary>
     private sealed class PageHeader : Panel
@@ -26,7 +27,7 @@ internal abstract class PageBase : UserControl
         private readonly Label _desc;
         private int _lastWidth = -1;
 
-        public PageHeader(string title, string description)
+        public PageHeader(string title, string description, string? help)
         {
             Dock = DockStyle.Top;
             _title = Theme.Label(title, Theme.H1);
@@ -34,6 +35,22 @@ internal abstract class PageBase : UserControl
             _desc = new Label { Text = description, AutoSize = true, Font = Theme.Body, ForeColor = Theme.Gray, UseMnemonic = false };
             Controls.Add(_title);
             Controls.Add(_desc);
+            if (help is not null)
+            {
+                var link = new LinkLabel
+                {
+                    Text = "❓ How does this work?",
+                    AutoSize = true,
+                    Font = Theme.Body,
+                    LinkColor = Theme.Accent,
+                    ActiveLinkColor = Theme.Accent,
+                    LinkBehavior = LinkBehavior.HoverUnderline,
+                    UseMnemonic = false,
+                    Location = new Point(_title.PreferredWidth + 14, 12),
+                };
+                link.LinkClicked += (_, _) => HelpDialog.Show(FindForm(), title, help);
+                Controls.Add(link);
+            }
             Height = 80;
         }
 

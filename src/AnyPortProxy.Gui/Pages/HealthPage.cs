@@ -34,7 +34,14 @@ internal sealed class HealthPage : PageBase
         Controls.Add(bar);
         Controls.Add(Header("Health check",
             "Looks for common problems — the service, Windows Firewall, your router, DNS, programs blocking ports 80/443 — " +
-            "and fixes most of them with one click."));
+            "and fixes most of them with one click.",
+            "Press \"Run health check\" and read from the top:\n\n" +
+            "✖  red = a problem that stops something working\n" +
+            "⚠  yellow = something to look at\n" +
+            "ℹ  blue = useful information\n" +
+            "✔  green = fine\n\n" +
+            "Many problems have a blue button (like \"Start it\" or \"Add the rule\") that fixes it for you, or press \"Fix everything I can\".\n\n" +
+            "A few things it can't change for you — your router's settings and your domain's DNS records — but it tells you exactly what to set there."));
         _results.BringToFront();
     }
 

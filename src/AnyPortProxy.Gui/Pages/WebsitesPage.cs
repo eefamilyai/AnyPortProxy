@@ -48,7 +48,16 @@ internal sealed class WebsitesPage : PageBase
         Controls.Add(defaultRow);
         Controls.Add(Header("Websites",
             "When someone types one of these addresses in their browser, AnyPortProxy sends them to the computer you chose. " +
-            "Works for both http and https — your certificates stay on that computer."));
+            "Works for both http and https — your certificates stay on that computer.",
+            "A website rule says: \"visitors to this address go to that computer\".\n\n" +
+            "Example: nas.example.com → 192.168.1.20 (ports 80/443). Someone opens https://nas.example.com, AnyPortProxy reads the name and passes " +
+            "the connection to your NAS untouched, so the NAS's own certificate (the padlock) is what the visitor sees.\n\n" +
+            "To add one:\n" +
+            "1.  Press \"+ Add website\", type the address (just \"nas\" if your domain is set in Settings).\n" +
+            "2.  Pick the computer (\"This PC\" or its IP address — find it in your router's device list).\n" +
+            "3.  Press \"Test connection\" to check that computer answers.\n\n" +
+            "The address must also exist on the internet: at your domain provider, add an A record for it (or one *.example.com record for everything). " +
+            "The dialog tells you if it's missing."));
         listHost.BringToFront();
     }
 

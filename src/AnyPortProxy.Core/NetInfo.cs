@@ -70,6 +70,14 @@ public static class NetInfo
 
     public static IPAddress? GetLanAddress() => GatewayInterfaceAddresses().FirstOrDefault();
 
+    /// <summary>The router's address on the home network (where its settings page usually lives).</summary>
+    public static IPAddress? GetGatewayAddress() =>
+        NetworkInterface.GetAllNetworkInterfaces()
+            .Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+            .SelectMany(n => n.GetIPProperties().GatewayAddresses)
+            .Select(g => g.Address)
+            .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork && !a.Equals(IPAddress.Any));
+
     public static async Task<IPAddress?> GetPublicIpAsync(CancellationToken ct = default)
     {
         foreach (var url in new[] { "https://api.ipify.org", "https://ipv4.icanhazip.com" })

@@ -89,8 +89,11 @@ public static class PortHelper
         }
         if (r.Protocol != PortProtocol.Tcp)
         {
-            results.Add(CheckResult.Info($"UDP {range} goes straight to this PC",
-                "AnyPortProxy doesn't relay UDP; your router and Windows Firewall handle it directly."));
+            results.Add(ca.Enabled && ca.Udp
+                ? CheckResult.Info($"UDP {range}: apps on this PC get it directly",
+                    "Apps listening on all network interfaces receive UDP straight away (the firewall rule below lets them); apps that only listen on localhost are relayed by AnyPortProxy.")
+                : CheckResult.Info($"UDP {range} goes straight to this PC",
+                    "UDP forwarding is off, so your router and Windows Firewall handle it directly."));
         }
 
         // 2. Windows Firewall

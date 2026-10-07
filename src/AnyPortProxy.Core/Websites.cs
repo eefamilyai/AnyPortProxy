@@ -104,7 +104,7 @@ public static class Websites
         computer = computer.Trim();
         if (computer.Length == 0) return "Type the IP address of the computer (like 192.168.1.20), or click \"This PC\"";
         if (computer.Contains("://") || computer.Contains('/')) return "Just the IP address or computer name, like 192.168.1.20";
-        if (!TargetParser.TryParse(computer, out _, out var port)) return "That doesn't look like an IP address or computer name";
+        if (!TargetParser.TryParseValid(computer, out _, out var port)) return "That doesn't look like an IP address or computer name";
         if (port is not null) return "Put the port in the port boxes instead of here";
         return null;
     }

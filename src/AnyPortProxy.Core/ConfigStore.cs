@@ -73,6 +73,7 @@ public static class ConfigStore
             Domain = (string?)root["Domain"],
             Proxy = root["Proxy"]?.Deserialize<ProxyOptions>(Json) ?? CreateDefault().Proxy,
             Ports = root["Ports"]?.Deserialize<List<PortRule>>(Json) ?? new(),
+            Onboarded = (bool?)root["Onboarded"] ?? false,
         };
         return cfg;
     }
@@ -84,6 +85,7 @@ public static class ConfigStore
         root["Domain"] = string.IsNullOrWhiteSpace(cfg.Domain) ? null : cfg.Domain.Trim();
         root["Proxy"] = JsonSerializer.SerializeToNode(cfg.Proxy, Json);
         root["Ports"] = JsonSerializer.SerializeToNode(cfg.Ports, Json);
+        root["Onboarded"] = cfg.Onboarded;
         root["Logging"] ??= new JsonObject
         {
             ["LogLevel"] = new JsonObject

@@ -1,1 +1,6 @@
-return args.Length > 0 && args[0] == "load" ? await Load.Run(args) : Unit.Run();
+return args.Length == 0 ? Unit.Run() : args[0] switch
+{
+    "load" => await Load.Run(args),
+    "udp" => await Udp.Run(args),
+    _ => Unit.Run(),
+};

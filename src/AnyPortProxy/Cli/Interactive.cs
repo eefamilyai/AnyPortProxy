@@ -26,6 +26,12 @@ internal static class Interactive
             if (AnsiConsole.Confirm("Welcome! AnyPortProxy isn't installed yet. Start the guided setup?", true))
                 await SetupAsync();
         }
+        else if (!ConfigStore.Load().Onboarded)
+        {
+            Ui.Banner();
+            if (AnsiConsole.Confirm("New here? Take the 2-minute tour of how AnyPortProxy works?", true))
+                await TourAsync();
+        }
 
         while (true)
         {
@@ -37,11 +43,13 @@ internal static class Interactive
             var state = ServiceManager.GetState();
             var items = new List<(string Label, Func<Task<bool>> Run)>
             {
+                ("📖  Learn how AnyPortProxy works (2-minute tour)", async () => { await TourAsync(); return false; }),
                 ("🌐  Websites — choose which computer each address goes to", async () => { await WebsitesMenuAsync(); return false; }),
                 ("🎮  Open a port for a game or app", async () => { await OpenPortAsync(ConfigStore.Load()); return true; }),
                 ("🔍  Check a port (why can't people connect?)", async () => { await CheckPortAsync(); return true; }),
                 ("🔒  Close a port", async () => { await ClosePortAsync(ConfigStore.Load()); return true; }),
                 ("🔀  All-ports forwarding settings", async () => { await ForwardMenuAsync(); return false; }),
+                ("📡  Send a port to another computer (TCP / UDP)", () => { PortMapMenu(); return Task.FromResult(false); }),
                 ("🩺  Health check — find and fix problems", async () => { await CliApp.CheckAsync(false); return true; }),
                 ("📜  Watch live activity", () => { WatchLogs(); return Task.FromResult(false); }),
             };
@@ -504,6 +512,7 @@ internal static class Interactive
                 "Unblock a port",
                 ca.InterceptLan ? "Only redirect internet visitors (recommended)" : "Also redirect devices on my home network",
                 "Send forwarded ports to a different computer",
+                ca.Udp ? "Turn UDP forwarding OFF" : "Turn UDP forwarding ON",
                 "Back",
             };
             var choice = AnsiConsole.Prompt(new SelectionPrompt<string>().Title("\nWhat now?").AddChoices(choices));
@@ -534,6 +543,9 @@ internal static class Interactive
                     ca.BlockedPorts.Remove(p);
                     break;
                 }
+                case "Turn UDP forwarding OFF" or "Turn UDP forwarding ON":
+                    ca.Udp = !ca.Udp;
+                    break;
                 case "Send forwarded ports to a different computer":
                     ca.Target = AskComputer("Send forwarded ports to which computer?");
                     break;
@@ -542,6 +554,161 @@ internal static class Interactive
                     break;
             }
             ConfigStore.Save(c);
+        }
+    }
+
+    /// <summary>The getting-started tour, terminal edition.</summary>
+    public static async Task TourAsync()
+    {
+        var c = ConfigStore.Load();
+        var domain = string.IsNullOrWhiteSpace(c.Domain) ? "yourdomain.com" : c.Domain;
+        var lan = NetInfo.GetLanAddress()?.ToString() ?? "this PC's address";
+        var gw = NetInfo.GetGatewayAddress()?.ToString();
+
+        var pages = new (string Title, string Body)[]
+        {
+            ("Welcome 👋",
+                "AnyPortProxy lets people on the internet reach things running on your computers at home — " +
+                "your NAS, a website, a game server, a dev project — using your own domain.\n\n" +
+                "  [deepskyblue1]People online[/]  →  [yellow]your router[/]  →  [green]this PC (AnyPortProxy)[/]  →  [mediumpurple]your computers[/]\n\n" +
+                "This tour takes about 2 minutes."),
+            ("Two ways in",
+                "[bold]🌐 Websites — the address decides[/]  (ports 80/443)\n" +
+                $"  nas.{domain}  →  AnyPortProxy reads the address  →  your NAS\n\n" +
+                "[bold]🎮 Games & apps — the port decides[/]  (every other port, TCP and UDP)\n" +
+                $"  {domain}:25565  →  AnyPortProxy keeps the port  →  Minecraft on this PC\n\n" +
+                "[grey]The address only matters for websites; for games and apps every name that points to you works the same.[/]"),
+            ("Your domain",
+                "The name people type, bought once from a domain provider (Cloudflare, Namecheap…).\n" +
+                (c.Domain is null ? "Set it with:  [deepskyblue1]apx domain example.com[/]\n\n" : $"Yours: [bold]{c.Domain}[/]\n\n") +
+                "At your provider, add two A records pointing to your internet address:\n" +
+                "  [bold]@[/]  (the domain itself)\n  [bold]*[/]  (any subdomain — so new names work without touching DNS again)\n\n" +
+                "[grey]Cloudflare users: set them to \"DNS only\" (grey cloud) for games and apps.[/]"),
+            ("Your router",
+                "Your router blocks everything from the internet until you tell it once: \"send everything to this PC\".\n\n" +
+                $"  1. Open its settings page{(gw is null ? "" : $" ([deepskyblue1]http://{gw}[/])")} — the login is often on a sticker.\n" +
+                "  2. Find [bold]DMZ[/] (under Advanced, NAT or Firewall).\n" +
+                $"  3. Set the DMZ host to [bold]{lan}[/] and save.\n\n" +
+                $"No DMZ? Forward ports 1–65535, TCP and UDP, to {lan}.\n" +
+                "[grey]Dangerous ports (Remote Desktop, file sharing…) stay blocked by AnyPortProxy.[/]"),
+            ("Websites",
+                "A website rule: \"visitors to this address go to that computer\". Certificates stay on that computer.\n\n" +
+                "  [deepskyblue1]apx site add nas 192.168.1.20[/]                   (http→80, https→443 there)\n" +
+                "  [deepskyblue1]apx site add theo 192.168.1.30 --http 5000 --https 5001[/]\n" +
+                "  [deepskyblue1]apx site add white this-pc --http 8080 --https off[/]   (a site on this PC)\n" +
+                "  [deepskyblue1]apx sites[/]                                        (list them)"),
+            ("Games & apps",
+                $"Every port is already forwarded: start a server on this PC and people connect to {domain}:PORT.\n\n" +
+                "\"Open a port\" adds a firewall rule (for devices at home), opens your router (UPnP) and gives the app the fastest path:\n" +
+                "  [deepskyblue1]apx port open \"minecraft java\" --router[/]\n" +
+                "  [deepskyblue1]apx port check 25565[/]                          (why can't people connect?)\n\n" +
+                "Server on another computer? Send the port there:\n" +
+                "  [deepskyblue1]apx portmap add 51820 192.168.1.20 --udp --name WireGuard[/]"),
+            ("Check everything",
+                "The health check looks at the service, firewall, router, DNS and websites, and fixes most problems:\n" +
+                "  [deepskyblue1]apx check[/]          [deepskyblue1]apx check --fix[/]\n\n" +
+                "Watch connections live:  [deepskyblue1]apx logs -f[/]\n" +
+                "Test from outside: your phone on mobile data (not Wi-Fi)."),
+            ("You're ready 🎉",
+                "  [deepskyblue1]apx[/]            the menu (easiest)\n" +
+                "  [deepskyblue1]apx status[/]     is everything running?\n" +
+                "  [deepskyblue1]apx help[/]       every command\n" +
+                "  [deepskyblue1]apx gui[/]        the app, with the same features and this tour\n" +
+                "  [deepskyblue1]apx tour[/]       this tour again"),
+        };
+
+        for (int i = 0; i < pages.Length; i++)
+        {
+            if (Ui.Interactive) AnsiConsole.Clear();
+            Ui.Banner();
+            AnsiConsole.Write(new Panel(new Markup(pages[i].Body))
+                .Header($"[bold] {i + 1}/{pages.Length}  {Ui.E(pages[i].Title)} [/]")
+                .Border(BoxBorder.Rounded)
+                .Padding(2, 1));
+            if (!Ui.Interactive) continue;
+            AnsiConsole.MarkupLine(i < pages.Length - 1
+                ? "\n[grey]Enter = next · B = back · Q = quit the tour[/]"
+                : "\n[grey]Press any key to finish.[/]");
+            var key = Console.ReadKey(true).Key;
+            if (key == ConsoleKey.Q || key == ConsoleKey.Escape) break;
+            if (key == ConsoleKey.B && i > 0) i -= 2;
+        }
+
+        if (!c.Onboarded)
+        {
+            try
+            {
+                c = ConfigStore.Load();
+                c.Onboarded = true;
+                ConfigStore.Save(c);
+            }
+            catch
+            {
+                // Not admin: fine, the tour flag just isn't remembered.
+            }
+        }
+
+        if (Ui.Interactive && Elevation.IsAdmin && Websites.List(ConfigStore.Load().Proxy).Count == 0
+            && AnsiConsole.Confirm("\nSet things up now with the guided setup?", true))
+            await SetupAsync();
+    }
+
+    private static void PortMapMenu()
+    {
+        while (true)
+        {
+            AnsiConsole.Clear();
+            Ui.Banner();
+            AnsiConsole.MarkupLine("[bold]Send a port to another computer[/] — e.g. UDP 51820 → your NAS for WireGuard, or TCP 22 → a Raspberry Pi.\n");
+            var c = ConfigStore.Load();
+            CliApp.PortMapList(c);
+            var choices = new List<string> { "Add a port rule" };
+            if (c.Proxy.Forwards.Count > 0) choices.Add("Remove a port rule");
+            choices.Add("Back");
+            var choice = AnsiConsole.Prompt(new SelectionPrompt<string>().Title("\nWhat now?").AddChoices(choices));
+            try
+            {
+                if (choice == "Back") return;
+                if (choice == "Remove a port rule")
+                {
+                    var rule = AnsiConsole.Prompt(new SelectionPrompt<PortForward>().Title("Remove which?")
+                        .UseConverter(f => Ui.E($"{f.ProtocolText} {f.Range} → {f.Target}  {f.Name}")).AddChoices(c.Proxy.Forwards));
+                    c.Proxy.Forwards.Remove(rule);
+                    ConfigStore.Save(c);
+                    Ui.Ok("Removed.");
+                    Ui.PressAnyKey();
+                    continue;
+                }
+
+                var text = AnsiConsole.Prompt(new TextPrompt<string>("Port on this PC (or range like 2456-2458):")
+                    .Validate(s => PortRanges.TryParseOne(s, out _, out _) ? ValidationResult.Success() : ValidationResult.Error("[red]Type a number from 1 to 65535[/]")));
+                PortRanges.TryParseOne(text, out var lo, out var hi);
+                var preset = Presets.ForPort(lo);
+                if (preset is not null) Ui.Info($"Port {lo} is usually {preset.Name} ({preset.ProtocolText}).");
+                var proto = AnsiConsole.Prompt(new SelectionPrompt<PortProtocol>()
+                    .Title("What kind? [grey](games, voice and VPNs usually use UDP)[/]")
+                    .UseConverter(p => p switch { PortProtocol.Tcp => "TCP", PortProtocol.Udp => "UDP", _ => "Both TCP and UDP" })
+                    .AddChoices(new[] { preset?.Protocol ?? PortProtocol.Tcp, PortProtocol.Tcp, PortProtocol.Udp, PortProtocol.Both }.Distinct()));
+                Ui.Hint("The computer's IP address, e.g. 192.168.1.20. Add :port to use a different port there.");
+                var target = AnsiConsole.Prompt(new TextPrompt<string>("Send it to:"));
+                var name = AnsiConsole.Prompt(new TextPrompt<string>("Name:").DefaultValue(preset?.Name ?? $"Port {text}"));
+                var f = new PortForward { Port = lo, EndPort = hi > lo ? hi : null, Protocol = proto, Target = ExpandComputer(target), Name = name };
+                if (PortForwards.Validate(c.Proxy, f) is { } err)
+                {
+                    Ui.Error(err);
+                }
+                else
+                {
+                    c.Proxy.Forwards.Add(f);
+                    ConfigStore.Save(c);
+                    Ui.Ok($"{f.ProtocolText} {f.Range} now goes to {f.Target}. Make sure your router forwards it to this PC.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Ui.Error(ex.Message);
+            }
+            Ui.PressAnyKey();
         }
     }
 

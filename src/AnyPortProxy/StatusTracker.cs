@@ -24,6 +24,12 @@ public sealed class StatusTracker
 
     public void RemoveListener(int port) => _listeners.TryRemove(port, out _);
 
+    private readonly ConcurrentDictionary<string, ForwardStatus> _forwards = new();
+
+    public void SetForward(string key, ForwardStatus status) => _forwards[key] = status;
+
+    public void RemoveForward(string key) => _forwards.TryRemove(key, out _);
+
     public void SetCatchAll(string state, string? message) =>
         _catchAll = new CatchAllStatus { State = state, Message = message };
 
@@ -66,6 +72,8 @@ public sealed class StatusTracker
             PacketsPerSec = (packets - _prevPackets) / secs,
             IgnoredProbes = Interlocked.Read(ref Metrics.IgnoredProbes),
             DirectConnections = Interlocked.Read(ref Metrics.DirectConnections),
+            Forwards = _forwards.Values.OrderBy(f => f.Port).ThenBy(f => f.Protocol).ToList(),
+            UdpSessions = AnyPortProxy.Proxy.UdpRelay.ActiveSessions,
             ConfigError = config.Error,
             ConfigNotes = config.Notes.ToList(),
             Repairs = _repairs.ToList(),

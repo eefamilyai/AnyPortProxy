@@ -67,6 +67,10 @@ internal sealed class SettingsPage : PageBase
                 perIp.Value = 300;
             })));
 
+        Section("Help");
+        _stack.Controls.Add(Theme.Wrap("New to AnyPortProxy, or forgot how something works? The tour explains everything step by step and helps you set it up.", Theme.Small, Theme.Gray));
+        _stack.Controls.Add(Row(Theme.Primary("📖  Show the getting-started tour", (_, _) => Main.ShowTour())));
+
         Section("Terminal");
         _stack.Controls.Add(Theme.Wrap("Everything in this app also works from a terminal. Type  apx  for a menu, or  apx help  for all commands " +
                                        "(e.g.  apx port open \"minecraft java\",  apx check --fix,  apx logs -f).", Theme.Body));

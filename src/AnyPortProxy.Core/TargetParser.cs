@@ -32,6 +32,18 @@ public static class TargetParser
         return host.Length > 0;
     }
 
+    /// <summary>An IP address or a plausible computer/host name (letters, digits, dots, dashes, underscores).</summary>
+    public static bool IsValidHost(string host)
+    {
+        if (System.Net.IPAddress.TryParse(host, out _)) return true;
+        return host.Length is > 0 and <= 253 && !host.StartsWith('.') && !host.StartsWith('-')
+               && host.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_');
+    }
+
+    /// <summary>Parses and checks the host part too.</summary>
+    public static bool TryParseValid(string? value, out string host, out int? port) =>
+        TryParse(value, out host, out port) && IsValidHost(host);
+
     public static string Format(string host, int? port)
     {
         var h = host.Contains(':') ? $"[{host}]" : host;

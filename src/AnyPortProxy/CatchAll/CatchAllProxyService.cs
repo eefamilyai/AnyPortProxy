@@ -25,8 +25,11 @@ public sealed class CatchAllProxyService : BackgroundService
     private readonly ILogger<CatchAllProxyService> _log;
     private readonly object _lock = new();
 
+    private readonly UdpFlowTable _udpFlows = new();
     private ListenerTable? _listeners;
     private Socket? _listener;
+    private UdpRelay? _udpRelay;
+    private string? _udpError;
     private int _listenPort;
     private PacketRedirector? _redirector;
     private string? _filter;
@@ -58,6 +61,8 @@ public sealed class CatchAllProxyService : BackgroundService
                 try
                 {
                     _flows.Sweep();
+                    _udpFlows.Sweep();
+                    lock (_lock) _udpRelay?.Sweep();
                 }
                 catch (Exception ex)
                 {
@@ -67,7 +72,11 @@ public sealed class CatchAllProxyService : BackgroundService
                 if (++tick % 6 == 0)
                 {
                     bool broken;
-                    lock (_lock) broken = _config.Current.CatchAll.Enabled && _redirector is null;
+                    lock (_lock)
+                    {
+                        var c = _config.Current.CatchAll;
+                        broken = c.Enabled && (_redirector is null || (c.Udp && _udpRelay is null));
+                    }
                     if (broken) Apply();
                 }
             }
@@ -119,10 +128,9 @@ public sealed class CatchAllProxyService : BackgroundService
             return;
         }
 
-        string filter;
         try
         {
-            filter = FilterBuilder.Build(c, o.SniffPorts);
+            PortRanges.Parse(c.AllowedPorts);
         }
         catch (FormatException ex)
         {
@@ -149,6 +157,32 @@ public sealed class CatchAllProxyService : BackgroundService
             for (int i = 0; i < AcceptLoops; i++) _ = AcceptLoopAsync(listener);
         }
 
+        // UDP relay on the same internal port number (UDP and TCP ports are separate).
+        if (c.Udp && _udpRelay is null)
+        {
+            try
+            {
+                _udpRelay = new UdpRelay(UdpRelay.Bind(c.ListenPort, dualStack: false), ResolveUdp, _gate, _logLimit, _log);
+                _udpError = null;
+            }
+            catch (SocketException ex)
+            {
+                if (_udpError is null) _log.LogError("UDP forwarding unavailable: can't use internal UDP port {Port}: {Error}", c.ListenPort, ex.Message);
+                _udpError = $"UDP unavailable (internal UDP port {c.ListenPort}: {ex.Message})";
+            }
+        }
+        else if (!c.Udp && _udpRelay is not null)
+        {
+            _udpRelay.Dispose();
+            _udpRelay = null;
+            _udpError = null;
+        }
+
+        string filter = FilterBuilder.Build(c,
+            o.SniffPorts.Concat(o.Forwards.Where(f => f.HasTcp).SelectMany(f => Enumerable.Range(f.Port, f.Last - f.Port + 1))),
+            o.Forwards.Where(f => f.HasUdp).SelectMany(f => Enumerable.Range(f.Port, f.Last - f.Port + 1)),
+            udp: _udpRelay is not null);
+
         var policy = BuildPolicy(o);
         if (filter == _filter && _redirector is not null)
         {
@@ -161,7 +195,7 @@ public sealed class CatchAllProxyService : BackgroundService
         try
         {
             _listeners ??= new ListenerTable();
-            redirector = new PacketRedirector(filter, (ushort)c.ListenPort, _flows, _listeners, policy, _log);
+            redirector = new PacketRedirector(filter, (ushort)c.ListenPort, _flows, _udpFlows, _listeners, policy, _log);
             redirector.Faulted += reason => _ = Task.Run(() => OnFaulted(redirector, reason));
             redirector.Start(c.Workers);
         }
@@ -182,8 +216,8 @@ public sealed class CatchAllProxyService : BackgroundService
         old?.Dispose();
         _lastError = null;
         SetRunning(o);
-        _log.LogInformation("All-ports forwarding active: ports {Ports} (blocked: {Blocked}) -> {Target}:<same port>{Lan}; {Workers} packet workers{Smart}",
-            c.AllowedPorts, string.Join(",", c.BlockedPorts), CatchAllHost(o), c.InterceptLan ? "" : ", internet visitors only",
+        _log.LogInformation("All-ports forwarding active ({Protocols}): ports {Ports} (blocked: {Blocked}) -> {Target}:<same port>{Lan}; {Workers} packet workers{Smart}",
+            _udpRelay is not null ? "TCP+UDP" : "TCP", c.AllowedPorts, string.Join(",", c.BlockedPorts), CatchAllHost(o), c.InterceptLan ? "" : ", internet visitors only",
             c.Workers > 0 ? c.Workers : PacketRedirector.AutoWorkers, policy.Smart && policy.TargetIsLocal ? ", smart routing on" : "");
         _log.LogDebug("WinDivert filter: {Filter}", filter);
     }
@@ -216,8 +250,18 @@ public sealed class CatchAllProxyService : BackgroundService
     }
 
     private void SetRunning(ProxyOptions o) =>
-        _status.SetCatchAll("Running", $"Ports {o.CatchAll.AllowedPorts} → {CatchAllHost(o)}" +
-                                       (o.CatchAll.BlockedPorts.Count > 0 ? $" (blocked: {string.Join(", ", o.CatchAll.BlockedPorts)})" : ""));
+        _status.SetCatchAll("Running", $"{(_udpRelay is not null ? "TCP+UDP" : "TCP")} ports {o.CatchAll.AllowedPorts} → {CatchAllHost(o)}" +
+                                       (o.CatchAll.BlockedPorts.Count > 0 ? $" (blocked: {string.Join(", ", o.CatchAll.BlockedPorts)})" : "") +
+                                       (_udpError is not null ? $" — {_udpError}" : ""));
+
+    /// <summary>Where a redirected UDP client's datagrams go (null = not a client we redirected).</summary>
+    private UdpTarget? ResolveUdp(IPEndPoint client)
+    {
+        var flow = _udpFlows.Get(client);
+        if (flow is null) return null;
+        var host = flow.TargetOverride ?? CatchAllHost(_config.Current);
+        return new UdpTarget(host, flow.OriginalPort, "forwarded");
+    }
 
     private void Fail(string message)
     {
@@ -234,6 +278,8 @@ public sealed class CatchAllProxyService : BackgroundService
         _filter = null;
         _listener?.Dispose();
         _listener = null;
+        _udpRelay?.Dispose();
+        _udpRelay = null;
     }
 
     private static string CatchAllHost(ProxyOptions o)

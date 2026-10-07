@@ -28,6 +28,7 @@ internal sealed unsafe class PacketRedirector : IDisposable
     private readonly IntPtr _handle;
     private readonly ushort _listenPort;
     private readonly FlowTable _flows;
+    private readonly UdpFlowTable _udpFlows;
     private readonly ListenerTable _listeners;
     private readonly ILogger _log;
     private readonly List<Thread> _threads = new();
@@ -39,10 +40,11 @@ internal sealed unsafe class PacketRedirector : IDisposable
     /// <summary>Raised once if the driver handle stops working while we weren't shutting down.</summary>
     public event Action<string>? Faulted;
 
-    public PacketRedirector(string filter, ushort listenPort, FlowTable flows, ListenerTable listeners, RedirectPolicy policy, ILogger log)
+    public PacketRedirector(string filter, ushort listenPort, FlowTable flows, UdpFlowTable udpFlows, ListenerTable listeners, RedirectPolicy policy, ILogger log)
     {
         _listenPort = listenPort;
         _flows = flows;
+        _udpFlows = udpFlows;
         _listeners = listeners;
         _policy = policy;
         _log = log;
@@ -142,7 +144,7 @@ internal sealed unsafe class PacketRedirector : IDisposable
             {
                 var pkt = new Span<byte>(cur, (int)len);
                 var addr = addrs + i;
-                switch (Rewrite(pkt, addr->Outbound, addr->TcpChecksumValid, policy))
+                switch (Rewrite(pkt, addr->Outbound, addr->TcpChecksumValid, addr->UdpChecksumValid, policy))
                 {
                     case RewriteResult.ChecksumUpdated:
                         break;
@@ -165,12 +167,14 @@ internal sealed unsafe class PacketRedirector : IDisposable
 
     internal enum RewriteResult { Unchanged, ChecksumUpdated, NeedsChecksum }
 
-    private RewriteResult Rewrite(Span<byte> p, bool outbound, bool checksumValid, RedirectPolicy policy)
+    private RewriteResult Rewrite(Span<byte> p, bool outbound, bool checksumValid, bool udpChecksumValid, RedirectPolicy policy)
     {
-        if (p.Length < 20 || (p[0] >> 4) != 4 || p[9] != 6) return RewriteResult.Unchanged;
+        if (p.Length < 20 || (p[0] >> 4) != 4) return RewriteResult.Unchanged;
         if ((BinaryPrimitives.ReadUInt16BigEndian(p[6..]) & 0x1FFF) != 0) return RewriteResult.Unchanged; // non-first fragment
         int ihl = (p[0] & 0x0F) * 4;
-        if (ihl < 20 || p.Length < ihl + 20) return RewriteResult.Unchanged;
+        if (ihl < 20) return RewriteResult.Unchanged;
+        if (p[9] == 17) return p.Length >= ihl + 8 ? RewriteUdp(p, ihl, outbound, udpChecksumValid, policy) : RewriteResult.Unchanged;
+        if (p[9] != 6 || p.Length < ihl + 20) return RewriteResult.Unchanged;
 
         uint src = BinaryPrimitives.ReadUInt32BigEndian(p[12..]);
         uint dst = BinaryPrimitives.ReadUInt32BigEndian(p[16..]);
@@ -237,6 +241,68 @@ internal sealed unsafe class PacketRedirector : IDisposable
         if ((kind & (ListenKind.V6Any | ListenKind.V6Loopback)) != 0) targetOverride = "::1";   // e.g. Vite/Node on "localhost"
         else if (boundToDst) targetOverride = new System.Net.IPAddress(BinaryPrimitives.ReverseEndianness(dstIp)).ToString();
         return true;
+    }
+
+    private RewriteResult RewriteUdp(Span<byte> p, int ihl, bool outbound, bool checksumValid, RedirectPolicy policy)
+    {
+        uint src = BinaryPrimitives.ReadUInt32BigEndian(p[12..]);
+        uint dst = BinaryPrimitives.ReadUInt32BigEndian(p[16..]);
+        var udp = p[ihl..];
+        ushort srcPort = BinaryPrimitives.ReadUInt16BigEndian(udp);
+        ushort dstPort = BinaryPrimitives.ReadUInt16BigEndian(udp[2..]);
+
+        if (!outbound)
+        {
+            var f = _udpFlows.Get(src, srcPort);
+            if (f is null || f.OriginalPort != dstPort)
+            {
+                if (!DecideUdp(policy, dstPort, dst, out var targetOverride)) return RewriteResult.Unchanged;
+                if (!_udpFlows.TryCreate(src, srcPort, dstPort, targetOverride)) return RewriteResult.Unchanged;
+            }
+            return SetUdpPort(udp, 2, dstPort, _listenPort, checksumValid);
+        }
+
+        if (srcPort != _listenPort) return RewriteResult.Unchanged;
+        var flow = _udpFlows.Get(dst, dstPort);
+        if (flow is null) return RewriteResult.Unchanged;
+        return SetUdpPort(udp, 0, srcPort, flow.OriginalPort, checksumValid);
+    }
+
+    /// <summary>
+    /// UDP has no handshake, and replies to this PC's own outgoing UDP look exactly like new traffic. So:
+    /// an app listening on all interfaces always gets UDP directly (never relayed — that would break its replies);
+    /// only localhost-only apps, or a forwarding target on another computer, are relayed.
+    /// </summary>
+    private bool DecideUdp(RedirectPolicy policy, ushort port, uint dstIp, out string? targetOverride)
+    {
+        targetOverride = null;
+        var kind = _listeners.Lookup(udp: true, port, dstIp, out bool boundToDst, out bool own);
+        if (own) return false;                                                    // one of AnyPortProxy's own sockets
+        if ((kind & ListenKind.V4Any) != 0 || boundToDst) return false;          // the app takes it directly
+        if (!policy.TargetIsLocal) return true;                                   // relay to the other computer
+        if (kind == ListenKind.None) return false;                                // nothing here: let Windows drop it
+        if ((kind & ListenKind.V4Loopback) != 0) return true;                     // localhost-only app → 127.0.0.1
+        if ((kind & (ListenKind.V6Loopback | ListenKind.V6Any)) != 0)
+        {
+            targetOverride = "::1";
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Writes a UDP port and fixes the checksum incrementally when present and valid (0 = "no checksum" in IPv4).</summary>
+    internal static RewriteResult SetUdpPort(Span<byte> udp, int offset, ushort oldPort, ushort newPort, bool checksumValid)
+    {
+        BinaryPrimitives.WriteUInt16BigEndian(udp[offset..], newPort);
+        ushort hc = BinaryPrimitives.ReadUInt16BigEndian(udp[6..]);
+        if (hc == 0) return RewriteResult.ChecksumUpdated; // sender didn't use a checksum: nothing to fix
+        if (!checksumValid) return RewriteResult.NeedsChecksum;
+        uint sum = (uint)(ushort)~hc + (ushort)~oldPort + newPort;
+        sum = (sum & 0xFFFF) + (sum >> 16);
+        sum = (sum & 0xFFFF) + (sum >> 16);
+        ushort result = (ushort)~sum;
+        BinaryPrimitives.WriteUInt16BigEndian(udp[6..], result == 0 ? (ushort)0xFFFF : result); // RFC 768: computed 0 is sent as all ones
+        return RewriteResult.ChecksumUpdated;
     }
 
     /// <summary>Writes a port and fixes the TCP checksum incrementally (RFC 1624) when it was valid.</summary>

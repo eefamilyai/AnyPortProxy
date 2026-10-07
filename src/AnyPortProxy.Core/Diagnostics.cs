@@ -172,6 +172,17 @@ public static class Diagnostics
                     "Is that computer turned on, and is the website running on that port?"));
         }
 
+        // --- Port rules ("send a port to another computer")
+        foreach (var f in c.Proxy.Forwards.Where(f => f.HasTcp))
+        {
+            var (host, port) = f.TargetFor(f.Port);
+            bool ok = await NetInfo.CanConnectAsync(host, port, 2000, ct);
+            report(ok
+                ? CheckResult.Ok($"Port rule {f.Name} → {TargetParser.Format(host, port)} is answering")
+                : CheckResult.Warn($"Port rule {f.Name} (TCP {f.Range}) → {TargetParser.Format(host, port)} isn't answering",
+                    "Is that computer on and the app running? (UDP rules can't be tested this way.)"));
+        }
+
         // --- Internet address and DNS
         progress?.Invoke("Looking up your internet address…");
         var publicIp = await NetInfo.GetPublicIpAsync(ct);
@@ -207,6 +218,27 @@ public static class Diagnostics
                     report(CheckResult.Warn($"{name} points to {string.Join(", ", addrs.Select(a => a.ToString()))}, not your internet address ({publicIp})",
                         "Update the A record at your domain provider (or your dynamic DNS). If you use Cloudflare's orange-cloud proxy, this is expected."));
             }
+
+            // Wildcard DNS: does any made-up subdomain reach you? Then new subdomains need no DNS changes.
+            if (!string.IsNullOrWhiteSpace(c.Domain))
+            {
+                var probe = $"apx-check-{Guid.NewGuid():N}"[..20] + "." + c.Domain.Trim().TrimEnd('.');
+                IPAddress[] wild;
+                try { wild = await Dns.GetHostAddressesAsync(probe, ct); } catch { wild = []; }
+                if (wild.Contains(publicIp))
+                    report(CheckResult.Ok($"Any subdomain of {c.Domain} reaches you (wildcard DNS is set up)"));
+                else
+                    report(CheckResult.Info($"New subdomains of {c.Domain} need their own DNS record",
+                        $"Tip: add one A record for *.{c.Domain} pointing to {publicIp} at your domain provider, and any subdomain (like game.{c.Domain}) works instantly. It doesn't cover {c.Domain} itself."));
+            }
+        }
+
+        // --- Reminder about the router (we can't see its manual settings)
+        if (c.Proxy.CatchAll.Enabled)
+        {
+            report(CheckResult.Info("Your router must send all ports to this PC",
+                "For \"any port works\", forward TCP and UDP 1–65535 to this PC in your router (or make this PC the DMZ host). " +
+                $"This PC's address on your network is {NetInfo.GetLanAddress()?.ToString() ?? "unknown"}. Test from outside with your phone on mobile data."));
         }
 
         // --- Router

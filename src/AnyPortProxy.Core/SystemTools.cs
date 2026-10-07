@@ -57,7 +57,7 @@ public static class Firewall
     {
         Delete(ProxyRuleName);
         var (code, output) = Netsh("advfirewall", "firewall", "add", "rule", $"name={ProxyRuleName}", "dir=in", "action=allow",
-            $"program={exe}", "protocol=TCP", "profile=any", "enable=yes",
+            $"program={exe}", "protocol=any", "profile=any", "enable=yes",
             "description=Lets internet traffic reach AnyPortProxy. Added by AnyPortProxy.");
         error = output;
         return code == 0;

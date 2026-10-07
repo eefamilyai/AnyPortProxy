@@ -16,6 +16,9 @@ internal struct WinDivertAddress
 
     /// <summary>The packet's TCP checksum is complete and valid (not left to NIC offload).</summary>
     public readonly bool TcpChecksumValid => (Bits & (1u << 22)) != 0;
+
+    /// <summary>The packet's UDP checksum is complete and valid.</summary>
+    public readonly bool UdpChecksumValid => (Bits & (1u << 23)) != 0;
 }
 
 internal static unsafe class WinDivert

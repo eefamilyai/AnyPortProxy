@@ -22,7 +22,7 @@ public static class ConfigSanitizer
                 notes.Add($"Ignored website \"{r.Host}\": {hostError}");
                 continue;
             }
-            if (!TargetParser.TryParse(r.Target, out _, out _))
+            if (!TargetParser.TryParseValid(r.Target, out _, out _))
             {
                 notes.Add($"Ignored website \"{r.Host}\": destination \"{r.Target}\" isn't valid");
                 continue;
@@ -36,7 +36,7 @@ public static class ConfigSanitizer
         }
         p.Routes = routes;
 
-        if (!TargetParser.TryParse(p.DefaultTarget, out _, out _))
+        if (!TargetParser.TryParseValid(p.DefaultTarget, out _, out _))
         {
             notes.Add($"Default destination \"{p.DefaultTarget}\" isn't valid; using 127.0.0.1");
             p.DefaultTarget = "127.0.0.1";
@@ -52,12 +52,26 @@ public static class ConfigSanitizer
         }
         ca.BlockedPorts = (ca.BlockedPorts ?? new()).Where(ValidPort).Distinct().Order().ToList();
         ca.AllowedPorts ??= "1-49151";
-        if (ca.Target is not null && !TargetParser.TryParse(ca.Target, out _, out _))
+        if (ca.Target is not null && !TargetParser.TryParseValid(ca.Target, out _, out _))
         {
             notes.Add($"Forwarding destination \"{ca.Target}\" isn't valid; using the default destination");
             ca.Target = null;
         }
         ca.Workers = Math.Clamp(ca.Workers, 0, 64);
+
+        var forwards = (p.Forwards ?? new()).Where(f => f is not null).ToList();
+        p.Forwards = new List<PortForward>();
+        foreach (var f in forwards)
+        {
+            f.Name ??= "";
+            f.Target ??= "";
+            if (PortForwards.Validate(p, f) is { } why)
+            {
+                notes.Add($"Ignored port rule {f.Range} → {f.Target}: {why}");
+                continue;
+            }
+            p.Forwards.Add(f);
+        }
 
         var l = p.Limits ??= new LimitOptions();
         l.MaxConnections = Math.Clamp(l.MaxConnections, 100, 1_000_000);

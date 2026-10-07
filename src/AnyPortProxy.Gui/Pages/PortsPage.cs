@@ -8,12 +8,13 @@ internal sealed class PortsPage : PageBase
     private readonly Banner _banner = new();
     private readonly Label _empty;
     private readonly Button _close;
-    private readonly CheckBox _enabled = new() { Text = "Forward every other TCP port to:", AutoSize = true, Font = Theme.Bold, Margin = new Padding(0, 8, 6, 0) };
+    private readonly CheckBox _enabled = new() { Text = "Forward every other port to:", AutoSize = true, Font = Theme.Bold, Margin = new Padding(0, 8, 6, 0) };
     private readonly TextBox _target = new() { Width = 160 };
     private readonly TextBox _allowed = new() { Width = 200 };
     private readonly TextBox _blocked = new() { Width = 380 };
     private readonly CheckBox _lan = new() { Text = "Also redirect devices on my home network (usually leave off)", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
     private readonly CheckBox _smart = new() { Text = "Smart routing (recommended) — ignore port scanners and deliver to apps the fastest way", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
+    private readonly CheckBox _udpBox = new() { Text = "Also forward UDP (games, voice chat, VPNs)", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
     private int _fillVersion;
 
     public PortsPage(MainForm main) : base(main)
@@ -25,14 +26,20 @@ internal sealed class PortsPage : PageBase
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = Theme.Gray,
-            Font = Theme.H2,
+            Font = Theme.Body,
             BackColor = Theme.Light,
         };
         var open = Theme.Primary("+  Open a port for a game or app", (_, _) => OpenPort());
         var check = Theme.Secondary("🔍  Check a port…", async (_, _) => await CheckPortAsync());
         _close = Theme.Secondary("🔒  Close selected", async (_, _) => await ClosePortAsync());
         var refresh = Theme.Secondary("↻  Refresh", (_, _) => OnShow(false));
-        var bar = ButtonBar(open, check, _close, refresh);
+        var portMap = Theme.Secondary("📡  Send a port to another computer…", (_, _) =>
+        {
+            using var dlg = new PortMapDialog(Main);
+            dlg.ShowDialog(Main);
+            OnShow(false);
+        });
+        var bar = ButtonBar(open, check, _close, portMap, refresh);
         _list.SelectedIndexChanged += (_, _) => _close.Enabled = _list.SelectedItems.Count > 0;
 
         // All-ports forwarding settings.
@@ -57,8 +64,9 @@ internal sealed class PortsPage : PageBase
         grid.Controls.Add(blockedRow, 1, 2);
         grid.Controls.Add(_lan, 1, 3);
         grid.Controls.Add(_smart, 1, 4);
+        grid.Controls.Add(_udpBox, 1, 5);
         var save = Theme.Primary("Save forwarding settings", (_, _) => SaveSettings());
-        grid.Controls.Add(save, 1, 5);
+        grid.Controls.Add(save, 1, 6);
         settings.Controls.Add(grid);
 
         var listHost = new Panel { Dock = DockStyle.Fill };
@@ -72,7 +80,16 @@ internal sealed class PortsPage : PageBase
         Controls.Add(_banner);
         Controls.Add(Header("Ports (games & apps)",
             "Run a game server or app on this PC and let people connect. \"Open a port\" sets up everything: " +
-            "AnyPortProxy, Windows Firewall and (if you want) your router."));
+            "AnyPortProxy, Windows Firewall and (if you want) your router.",
+            "Every port is already forwarded to this PC (that's \"all-ports forwarding\"). So usually you just start your game server or app, " +
+            "and people connect to yourdomain.com:PORT.\n\n" +
+            "\"Open a port\" adds the extras:\n" +
+            "•  a Windows Firewall rule, so devices at home can connect too,\n" +
+            "•  your router opened automatically (UPnP) if you didn't set up DMZ,\n" +
+            "•  the fastest path: connections go straight to the app, which sees players' real addresses.\n\n" +
+            "\"Send a port to another computer\" is for servers that run elsewhere — e.g. UDP 51820 → your NAS for WireGuard.\n\n" +
+            "Blocked ports (Remote Desktop, file sharing…) are never reachable from the internet unless you remove them from the list. " +
+            "UDP (games, voice, VPN) is handled too."));
         listHost.BringToFront();
     }
 
@@ -82,7 +99,7 @@ internal sealed class PortsPage : PageBase
         var c = Main.Config;
         var ca = c.Proxy.CatchAll;
         if (ca.Enabled)
-            _banner.Set(CheckStatus.Ok, $"All-ports forwarding is ON: anything you run on this PC on TCP ports {ca.AllowedPorts} can already be reached from the internet at {c.Domain ?? Main.PublicIp?.ToString() ?? "your internet address"}:PORT — except blocked ports. Opening a port below also sets up Windows Firewall, your router and UDP.");
+            _banner.Set(CheckStatus.Ok, $"All-ports forwarding is ON: anything you run on this PC on ports {ca.AllowedPorts} ({(ca.Udp ? "TCP and UDP" : "TCP")}) can already be reached from the internet at {c.Domain ?? Main.PublicIp?.ToString() ?? "your internet address"}:PORT — except blocked ports. Opening a port below also sets up Windows Firewall, your router and UDP.");
         else
             _banner.Set(CheckStatus.Warn, "All-ports forwarding is OFF: only the ports your router forwards straight to a computer are reachable. Turn it on below.");
 
@@ -92,6 +109,7 @@ internal sealed class PortsPage : PageBase
         _blocked.Text = string.Join(", ", ca.BlockedPorts);
         _lan.Checked = ca.InterceptLan;
         _smart.Checked = ca.SmartRouting;
+        _udpBox.Checked = ca.Udp;
         _ = FillAsync();
         if (autoRun) BeginInvoke(OpenPort);
     }
@@ -203,6 +221,7 @@ internal sealed class PortsPage : PageBase
         ca.Target = target == Main.Config.CatchAllHost && ca.Target is null ? null : target;
         ca.InterceptLan = _lan.Checked;
         ca.SmartRouting = _smart.Checked;
+        ca.Udp = _udpBox.Checked;
         if (Main.SaveConfig())
         {
             MessageBox.Show(Main, "Saved — AnyPortProxy applies it right away.", "All-ports forwarding", MessageBoxButtons.OK, MessageBoxIcon.Information);

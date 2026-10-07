@@ -30,6 +30,12 @@ public sealed class ServiceStatus
     /// <summary>Connections handed straight to an app (smart routing), bypassing the proxy.</summary>
     public long DirectConnections { get; set; }
 
+    /// <summary>"Send a port to another computer" rules and whether each could open its port.</summary>
+    public List<ForwardStatus> Forwards { get; set; } = new();
+
+    /// <summary>Active UDP relay sessions (all-ports forwarding + port rules).</summary>
+    public int UdpSessions { get; set; }
+
     /// <summary>Set when config.json can't be read; the proxy keeps running on the last good settings.</summary>
     public string? ConfigError { get; set; }
 
@@ -49,6 +55,8 @@ public sealed class ServiceStatus
             yield return $"Port {l.Port} couldn't be opened: {l.Error}";
         if (CatchAll.State == "Error")
             yield return $"All-ports forwarding failed: {CatchAll.Message}";
+        foreach (var f in Forwards.Where(f => !f.Listening))
+            yield return $"Port rule {f.Protocol} {f.Port} → {f.Target} couldn't start: {f.Error}";
     }
 
     public static string FormatRate(double bytesPerSec) => bytesPerSec switch
@@ -84,6 +92,15 @@ public sealed class ServiceStatus
 public sealed class ListenerStatus
 {
     public int Port { get; set; }
+    public bool Listening { get; set; }
+    public string? Error { get; set; }
+}
+
+public sealed class ForwardStatus
+{
+    public int Port { get; set; }
+    public string Protocol { get; set; } = "TCP";
+    public string Target { get; set; } = "";
     public bool Listening { get; set; }
     public string? Error { get; set; }
 }

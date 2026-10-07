@@ -32,6 +32,23 @@ static class Unit
         return (ushort)~sum;
     }
 
+    static ushort FullUdpChecksum(byte[] pkt)
+    {
+        int udpLen = pkt.Length - 20;
+        uint sum = 0;
+        for (int i = 12; i < 20; i += 2) sum += BinaryPrimitives.ReadUInt16BigEndian(pkt.AsSpan(i));
+        sum += 17;
+        sum += (uint)udpLen;
+        for (int i = 0; i < udpLen; i += 2)
+        {
+            if (i == 6) continue;
+            sum += i + 1 < udpLen ? BinaryPrimitives.ReadUInt16BigEndian(pkt.AsSpan(20 + i)) : (uint)(pkt[20 + i] << 8);
+        }
+        while (sum >> 16 != 0) sum = (sum & 0xFFFF) + (sum >> 16);
+        ushort r = (ushort)~sum;
+        return r == 0 ? (ushort)0xFFFF : r;
+    }
+
     public static int Run()
     {
         // --- RFC 1624 incremental checksum must equal a full recompute
@@ -134,12 +151,74 @@ static class Unit
         Check(HostnameSniffer.Sniff([0x16, 0x03, 0x01, 0xFF, 0xFF], out _, out _) == SniffStatus.NotFound, "tls huge record");
         Check(HostnameSniffer.Sniff([0x16, 0x03, 0x01, 0x02, 0x00], out _, out _) == SniffStatus.NeedMore, "tls partial record");
 
+        // --- UDP incremental checksum == full recompute (with pseudo-header), and "no checksum" stays 0
+        int udpBefore = _pass;
+        for (int t = 0; t < 20000 && _fail < 5; t++)
+        {
+            var pkt = new byte[28 + rnd.Next(0, 1400)];
+            rnd.NextBytes(pkt);
+            pkt[0] = 0x45;
+            pkt[9] = 17;
+            BinaryPrimitives.WriteUInt16BigEndian(pkt.AsSpan(24), (ushort)(pkt.Length - 20));
+            BinaryPrimitives.WriteUInt16BigEndian(pkt.AsSpan(26), FullUdpChecksum(pkt));
+            int off = rnd.Next(2) * 2;
+            ushort oldPort = BinaryPrimitives.ReadUInt16BigEndian(pkt.AsSpan(20 + off));
+            PacketRedirector.SetUdpPort(pkt.AsSpan(20), off, oldPort, (ushort)rnd.Next(1, 65536), true);
+            ushort got = BinaryPrimitives.ReadUInt16BigEndian(pkt.AsSpan(26)), want = FullUdpChecksum(pkt);
+            Check(got == want, $"udp checksum mismatch t={t} got={got:x4} want={want:x4}");
+        }
+        var noSum = new byte[8];
+        Check(PacketRedirector.SetUdpPort(noSum, 2, 0, 1234, true) == PacketRedirector.RewriteResult.ChecksumUpdated
+              && BinaryPrimitives.ReadUInt16BigEndian(noSum.AsSpan(6)) == 0, "udp no-checksum stays 0");
+        Console.WriteLine($"udp checksum: {_pass - udpBefore} checks");
+
+        // --- Filter: exclusions merge into runs (WinDivert filters have a size limit), UDP half present
+        var runs = FilterBuilder.Merge([5, 3, 4, 10, 1000, 1001, 1002]);
+        Check(runs.SequenceEqual([(3, 5), (10, 10), (1000, 1002)]), "merge runs");
+        var filter = FilterBuilder.Build(new CatchAllOptions { BlockedPorts = [22, 3389] }, [80, 443], Enumerable.Range(2000, 1000), udp: true);
+        Check(filter.Contains("inbound and udp") && filter.Contains("udp.SrcPort == 34010") && filter.Contains("(udp.DstPort < 2000 or udp.DstPort > 2999)")
+              && filter.Contains("udp.DstPort != 123"), "filter has udp half with merged exclusions");
+        Check(!FilterBuilder.Build(new CatchAllOptions(), [80], [], udp: false).Contains("udp"), "no udp when off");
+        Check(filter.Count(ch => ch == '(') == filter.Count(ch => ch == ')'), "filter parentheses balanced");
+
+        // --- UDP flows: create, reuse, collision protection
+        var uf = new UdpFlowTable();
+        Check(uf.TryCreate(7, 5000, 27015, null) && uf.TryCreate(7, 5000, 27015, null), "udp create/reuse");
+        Check(!uf.TryCreate(7, 5000, 9999, null), "udp collision while active");
+        Check(uf.Get(7, 5000)?.OriginalPort == 27015 && uf.Count == 1, "udp get");
+
+        // --- Port rules: validation catches the classic mistakes
+        var po = new ProxyOptions { SniffPorts = [80, 443] };
+        PortForward Fw(int port, string target, PortProtocol proto = PortProtocol.Udp, int? end = null) => new() { Port = port, EndPort = end, Target = target, Protocol = proto };
+        Check(PortForwards.Validate(po, Fw(51820, "192.168.58.20")) is null, "valid rule");
+        Check(PortForwards.Validate(po, Fw(443, "192.168.58.20", PortProtocol.Tcp)) is not null, "website port blocked for tcp");
+        Check(PortForwards.Validate(po, Fw(443, "192.168.58.20", PortProtocol.Udp)) is null, "udp 443 allowed");
+        Check(PortForwards.Validate(po, Fw(5000, "127.0.0.1")) is not null, "loop to self rejected");
+        Check(PortForwards.Validate(po, Fw(5000, "nas-ip-typo!")) is not null, "bad characters rejected");
+        Check(PortForwards.Validate(po, Fw(5000, "my-nas.local")) is null, "host names allowed");
+        Check(Websites.ValidateComputer("192.168.1.20!") is not null && Websites.ValidateComputer("nas") is null, "website computer validated");
+        Check(PortForwards.Validate(po, Fw(5000, "127.0.0.1:6000")) is null, "remap on this PC allowed");
+        Check(PortForwards.Validate(po, Fw(1, "x", PortProtocol.Udp, 5000)) is not null, "too many ports");
+        Check(PortForwards.Validate(po, Fw(60000, "1.2.3.4:65000", PortProtocol.Udp, 61000)) is not null, "target range overflow");
+        po.Forwards.Add(Fw(2456, "192.168.58.20", PortProtocol.Udp, 2458));
+        Check(PortForwards.Validate(po, Fw(2457, "192.168.58.30")) is not null, "overlap rejected");
+        Check(PortForwards.Validate(po, Fw(2457, "192.168.58.30", PortProtocol.Tcp)) is null, "same port other protocol ok");
+        Check(Fw(2456, "10.0.0.1:3000", PortProtocol.Udp, 2458).TargetFor(2458) == ("10.0.0.1", 3002), "range target mapping");
+        Console.WriteLine("udp/forward logic: done");
+
         // --- Listener table: sees real listeners (RPC on 135 always listens on 0.0.0.0)
         using var lt = new ListenerTable();
         var k = lt.Lookup(135, 0, out _);
         Check((k & ListenKind.V4Any) != 0, $"listener 135 kind={k}");
         Check(lt.Lookup(1, 0, out _) == ListenKind.None, "port 1 has no listener");
         Console.WriteLine($"listener table: port 135 = {k}");
+        using (var u = new System.Net.Sockets.UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
+        {
+            int up = ((IPEndPoint)u.Client.LocalEndPoint!).Port;
+            lt.Refresh();
+            lt.Lookup(udp: true, up, 0, out _, out bool own);
+            Check(own, $"own UDP socket {up} recognised (never redirected)");
+        }
 
         Console.WriteLine(_fail == 0 ? $"UNIT TESTS PASSED ({_pass} checks)" : $"UNIT TESTS FAILED: {_fail}");
         return _fail;

@@ -78,6 +78,7 @@ internal static class ProxyHost
         builder.Services.AddSingleton<LogLimiter>();
         builder.Services.AddHostedService<SniffingProxyService>();
         builder.Services.AddHostedService<CatchAllProxyService>();
+        builder.Services.AddHostedService<PortForwardService>();
         builder.Services.AddHostedService<StatusWriterService>();
         builder.Services.AddHostedService<SelfHealService>();
 
